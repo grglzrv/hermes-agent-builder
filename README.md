@@ -2,6 +2,11 @@
 
 Agent Builder is a standalone Hermes plugin for creating and managing self-service Hermes profile agents from the Hermes Dashboard and from the host CLI.
 
+<img width="1466" height="927" alt="image" src="https://github.com/user-attachments/assets/771ff639-8e55-4b6b-8e21-d9f7e49ee4b0" />
+<img width="1742" height="1282" alt="image" src="https://github.com/user-attachments/assets/106d9a22-e35f-41d6-ac83-f05428555622" />
+<img width="1710" height="1276" alt="image" src="https://github.com/user-attachments/assets/6ea2e567-3bc1-4990-96e9-86eda8bdeb99" />
+
+
 It provides:
 
 - **Dashboard UI tab**: `Agent Builder` for creating, selecting, updating, and bulk-deleting generated agents.
