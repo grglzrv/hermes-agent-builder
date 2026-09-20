@@ -1,0 +1,1 @@
+{"name":"agent-builder","label":"Agent Builder","description":"Create and approve self-service Hermes profile agents","icon":"Shield","version":"0.1.0","tab":{"path":"/agent-builder","position":"after:profiles"},"entry":"dist/index.js","css":"dist/style.css","api":"plugin_api.py"}

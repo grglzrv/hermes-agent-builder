@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+
+# Hermes/runtime state
+plugin-data/
+*.db
+*.db-shm
+*.db-wal
+
+# Editor/OS
+.DS_Store
+.idea/
+.vscode/
