@@ -195,8 +195,10 @@ Use `platform:id` values:
 - Users: `telegram:123456`, `discord:987654`, `slack:U123`
 - Toolsets: `web_search`, `web_extract`, `skill_view`, `read_file`, `mcp__*`
 - Skills: selected Hermes skill IDs, or leave blank to reuse selected agent skills
+- Fail mode: `fail_closed` defaults to `true`, and can be set to `false` to match hermes-rbac's permissive-on-config-error mode.
 - Inheritance: `extends: viewer` lets a role inherit another role's toolsets/skills.
 - Deny rules: `deny: terminal,write_file` removes inherited tool/toolset patterns.
+- Explicit user role maps: `user_roles` writes arbitrary `users:` mappings like `slack:U123: [dev, viewer]`.
 - Default users: `default_roles: guest` writes `users: {"*": [guest]}` for unknown users.
 - Identity linking: `identity_persons` writes `identities.yaml` so one human can map Telegram + Slack + Discord to a canonical identity.
 
@@ -205,6 +207,7 @@ Example full RBAC payload:
 ```json
 {
   "install": true,
+  "fail_closed": true,
   "role": "dev",
   "extends": ["viewer"],
   "deny": ["terminal"],
@@ -213,6 +216,9 @@ Example full RBAC payload:
   "toolsets": ["web_search", "web_extract", "skill_view", "mcp__github__*"],
   "skills": ["github", "test-driven-development"],
   "default_roles": ["guest"],
+  "user_roles": {
+    "slack:U123": ["dev", "viewer"]
+  },
   "extra_roles": {
     "viewer": {"toolsets": ["web_search", "skill_view"], "skills": ["youtube-content"]},
     "guest": {"toolsets": [], "skills": []}

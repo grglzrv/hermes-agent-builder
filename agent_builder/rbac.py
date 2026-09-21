@@ -101,6 +101,17 @@ def _normalize_identity_persons(value) -> dict:
     return persons
 
 
+def _normalize_user_roles(value) -> dict:
+    users = {}
+    for raw_user, raw_roles in _safe_mapping(value, "RBAC user_roles").items():
+        user = _validate_user_key(raw_user)
+        roles = [_validate_role_name(x) for x in _safe_list(raw_roles)]
+        if not roles:
+            raise ValidationError("RBAC user_roles entries must include at least one role")
+        users[user] = roles
+    return users
+
+
 def normalize_rbac_spec(spec: dict | None, *, selected_skills=()) -> dict | None:
     spec = spec or {}
     if not spec.get("install"):
@@ -123,8 +134,10 @@ def normalize_rbac_spec(spec: dict | None, *, selected_skills=()) -> dict | None
         "extends": [_validate_role_name(x) for x in _safe_list(spec.get("extends"))],
         "deny": [_validate_glob_item(x, "RBAC deny") for x in _safe_list(spec.get("deny"))],
         "default_roles": [_validate_role_name(x) for x in _safe_list(spec.get("default_roles"))],
+        "user_roles": _normalize_user_roles(spec.get("user_roles")),
         "extra_roles": _normalize_extra_roles(spec.get("extra_roles")),
         "identity_persons": _normalize_identity_persons(spec.get("identity_persons")),
+        "fail_closed": bool(spec.get("fail_closed", True)),
         "bypass_sensitive_paths": bool(spec.get("bypass_sensitive_paths")),
         "source": _normalize_source(spec.get("source")),
     }
@@ -135,6 +148,7 @@ def roles_yaml(spec: dict) -> dict:
     users = {u: [role] for u in spec.get("users", [])}
     if spec.get("default_roles"):
         users["*"] = list(spec.get("default_roles", []))
+    users.update(spec.get("user_roles") or {})
     roles = {
         "admin": {"toolsets": ["*"], "skills": ["*"], "bypass_sensitive_paths": True},
     }
@@ -160,7 +174,7 @@ def roles_yaml(spec: dict) -> dict:
         selected["deny"] = list(spec["deny"])
     roles[role] = selected
     return {
-        "fail_closed": True,
+        "fail_closed": bool(spec.get("fail_closed", True)),
         "bootstrap_admins": list(spec.get("bootstrap_admins", [])),
         "roles": roles,
         "users": users,

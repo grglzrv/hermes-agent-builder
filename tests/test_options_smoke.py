@@ -162,6 +162,35 @@ def test_rbac_full_dashboard_yaml_fields_are_accepted(tmp_path):
     assert identities["persons"]["george"]["identities"] == ["telegram:1", "slack:U123"]
 
 
+def test_rbac_supports_fail_closed_false_and_explicit_user_role_map(tmp_path):
+    s, a, h = service(tmp_path)
+    src = rbac_source(tmp_path)
+    ag = s.create_agent(a, {
+        "display_name": "Mapped RBAC Agent",
+        "model": "openai:gpt-5.5",
+        "rbac": {
+            "install": True,
+            "source": str(src),
+            "fail_closed": False,
+            "role": "viewer",
+            "users": ["telegram:2"],
+            "user_roles": {
+                "slack:U123": ["dev", "viewer"],
+                "discord:456": "guest",
+            },
+            "extra_roles": {
+                "dev": {"toolsets": ["terminal"], "skills": ["systematic-debugging"]},
+                "guest": {"toolsets": [], "skills": []},
+            },
+        },
+    })
+    roles = yaml.safe_load((h / "profiles" / ag["profile_name"] / "plugins" / "hermes-rbac" / "roles.yaml").read_text())
+    assert roles["fail_closed"] is False
+    assert roles["users"]["telegram:2"] == ["viewer"]
+    assert roles["users"]["slack:U123"] == ["dev", "viewer"]
+    assert roles["users"]["discord:456"] == ["guest"]
+
+
 def test_select_chat_binding_returns_agent(tmp_path):
     s, a, _h = service(tmp_path)
     ag = s.create_agent(a, {"display_name": "Chat Target", "model": "nous:Hermes-4"})
