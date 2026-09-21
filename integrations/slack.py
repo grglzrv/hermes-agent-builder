@@ -514,6 +514,32 @@ def _agent_instructions(service, profile_name: str) -> str:
     return text[len(prefix):] if text.startswith(prefix) else text
 
 
+def _agent_form_suffix(agent: dict[str, Any] | None, selected_agent_key: str = '') -> str:
+    raw = str((agent or {}).get('profile_name') or selected_agent_key or '')
+    safe = re.sub(r'[^A-Za-z0-9_-]+', '-', raw).strip('-')[:80]
+    return safe
+
+
+def _suffix_update_block_ids(blocks: list[dict[str, Any]], suffix: str) -> list[dict[str, Any]]:
+    """Force Slack to reload selected-agent fields on update.
+
+    Slack preserves input state across views_update when block_id/action_id match.
+    That is correct for ordinary Access/Advanced toggles, but wrong when the
+    user switches Agent to update: Purpose, Instructions, skills, MCP, RBAC,
+    etc. must be re-initialized from the newly selected agent. Suffixing every
+    mutable field with the selected profile makes Slack treat them as fresh
+    inputs while helper readers still resolve by base block id.
+    """
+    if not suffix:
+        return blocks
+    skip = {'agent_key'}
+    for block in blocks:
+        bid = block.get('block_id')
+        if isinstance(bid, str) and bid and bid not in skip and not bid.endswith('__' + suffix):
+            block['block_id'] = f'{bid}__{suffix}'[:255]
+    return blocks
+
+
 def _accessible_update_agents(service, actor) -> list[dict[str, Any]]:
     service.registry.upsert_principal(actor)
     if hasattr(service.registry, 'list_accessible_agents'):
@@ -686,6 +712,8 @@ def _advanced_modal_blocks(service=None, *, include_share_fields: bool | None = 
             _input_block('rbac_skills_text', 'Additional RBAC skills', optional=True, placeholder='research/research-paper-writing, devops/sdlc-review', hint='Optional comma-separated skills not visible in the first 100 Slack picker options.', initial_value=','.join(current_rbac.get('skills') or [])),
             _input_block('rbac_identity_persons', 'Cross-platform identities YAML/JSON', multiline=True, optional=True, placeholder='george:\n  canonical: telegram:123456\n  identities:\n    - telegram:123456\n    - slack:U123', initial_value=current_rbac.get('identity_persons') or None),
         ])
+    if mode == 'update':
+        return _suffix_update_block_ids(blocks, _agent_form_suffix(initial if initial else None, selected_agent_key))
     return blocks
 
 def _basic_modal_blocks(service=None) -> list[dict[str, Any]]:
@@ -889,8 +917,17 @@ def _stamp_bound_agent_profile(source, service, text: str = '') -> None:
         return
 
 
+def _modal_block_key(values: dict[str, Any], block: str) -> str | None:
+    if block in values:
+        return block
+    prefix = f'{block}__'
+    matches = [k for k in values if isinstance(k, str) and k.startswith(prefix)]
+    return matches[0] if matches else None
+
+
 def _modal_action(values: dict[str, Any], block: str) -> dict[str, Any]:
-    bucket = values.get(block) or {}
+    key = _modal_block_key(values, block)
+    bucket = values.get(key) if key else {}
     if not isinstance(bucket, dict):
         return {}
     if isinstance(bucket.get('value'), dict):
@@ -1002,18 +1039,18 @@ async def _handle_create_modal_submission(ack, body, service):
                 'bypass_sensitive_paths': _modal_value(values, 'rbac_bypass_sensitive_paths') == 'bypass',
             }
     except ValueError as e:
-        await ack(response_action='errors', errors={'rbac_extra_roles': str(e)[:200]})
+        await ack(response_action='errors', errors={_modal_block_key(values, 'rbac_extra_roles') or 'rbac_extra_roles': str(e)[:200]})
         return
-    errors = {k: 'Required' for k in ('display_name', 'model', 'purpose', 'instructions') if not payload.get(k)}
+    errors = {_modal_block_key(values, k) or k: 'Required' for k in ('display_name', 'model', 'purpose', 'instructions') if not payload.get(k)}
     if payload.get('rbac'):
         if not _modal_value(values, 'rbac_role'):
-            errors['rbac_role'] = 'Required'
+            errors[_modal_block_key(values, 'rbac_role') or 'rbac_role'] = 'Required'
         if not (payload.get('rbac') or {}).get('toolsets'):
-            errors['rbac_toolsets'] = 'Select at least one RBAC toolset'
+            errors[_modal_block_key(values, 'rbac_toolsets') or 'rbac_toolsets'] = 'Select at least one RBAC toolset'
         if not (payload.get('rbac') or {}).get('skills'):
-            errors['rbac_skills'] = 'Select at least one RBAC skill, or enter Additional RBAC skills'
+            errors[_modal_block_key(values, 'rbac_skills') or 'rbac_skills'] = 'Select at least one RBAC skill, or enter Additional RBAC skills'
         if not _modal_value(values, 'rbac_bypass_sensitive_paths'):
-            errors['rbac_bypass_sensitive_paths'] = 'Required'
+            errors[_modal_block_key(values, 'rbac_bypass_sensitive_paths') or 'rbac_bypass_sensitive_paths'] = 'Required'
     if errors:
         await ack(response_action='errors', errors=errors)
         return
@@ -1092,18 +1129,18 @@ async def _handle_update_modal_submission(ack, body, service):
                 'bypass_sensitive_paths': _modal_value(values, 'rbac_bypass_sensitive_paths') == 'bypass',
             }
     except ValueError as e:
-        await ack(response_action='errors', errors={'rbac_extra_roles': str(e)[:200]})
+        await ack(response_action='errors', errors={_modal_block_key(values, 'rbac_extra_roles') or 'rbac_extra_roles': str(e)[:200]})
         return
-    errors = {k: 'Required' for k in ('model', 'purpose') if not payload.get(k)}
+    errors = {_modal_block_key(values, k) or k: 'Required' for k in ('model', 'purpose') if not payload.get(k)}
     if payload.get('rbac'):
         if not _modal_value(values, 'rbac_role'):
-            errors['rbac_role'] = 'Required'
+            errors[_modal_block_key(values, 'rbac_role') or 'rbac_role'] = 'Required'
         if not (payload.get('rbac') or {}).get('toolsets'):
-            errors['rbac_toolsets'] = 'Select at least one RBAC toolset'
+            errors[_modal_block_key(values, 'rbac_toolsets') or 'rbac_toolsets'] = 'Select at least one RBAC toolset'
         if not (payload.get('rbac') or {}).get('skills'):
-            errors['rbac_skills'] = 'Select at least one RBAC skill, or enter Additional RBAC skills'
+            errors[_modal_block_key(values, 'rbac_skills') or 'rbac_skills'] = 'Select at least one RBAC skill, or enter Additional RBAC skills'
         if not _modal_value(values, 'rbac_bypass_sensitive_paths'):
-            errors['rbac_bypass_sensitive_paths'] = 'Required'
+            errors[_modal_block_key(values, 'rbac_bypass_sensitive_paths') or 'rbac_bypass_sensitive_paths'] = 'Required'
     if errors:
         await ack(response_action='errors', errors=errors)
         return
@@ -1138,6 +1175,11 @@ async def _update_create_modal(ack, body, client, service, *, access_value: str 
     if view.get('callback_id') == 'agent_builder_update':
         actor = _modal_actor(body or {})
         selected_agent = agent_key_value or _modal_value(values, 'agent_key')
+        # When the selected agent changes, rebuild from that agent's stored
+        # access policy/RBAC/profile fields. Do not carry over the previous
+        # agent's Access value, otherwise Slack can show Shared/Private fields
+        # for the wrong agent after using the selector.
+        include_share_for_update = None if agent_key_value is not None and access_value is None else include_share
         await client.views_update(
             view_id=view_id,
             hash=view.get('hash'),
@@ -1148,7 +1190,7 @@ async def _update_create_modal(ack, body, client, service, *, access_value: str 
                 'title': {'type': 'plain_text', 'text': 'Update Agent'},
                 'submit': {'type': 'plain_text', 'text': 'Update'},
                 'close': {'type': 'plain_text', 'text': 'Cancel'},
-                'blocks': _modal_blocks(service, mode='update', actor=actor, selected_agent_key=selected_agent, include_share_fields=include_share, current_user_id=current_user_id, include_advanced_fields=include_advanced, include_rbac_advanced_fields=include_rbac_advanced),
+                'blocks': _modal_blocks(service, mode='update', actor=actor, selected_agent_key=selected_agent, include_share_fields=include_share_for_update, current_user_id=current_user_id, include_advanced_fields=include_advanced, include_rbac_advanced_fields=include_rbac_advanced),
             },
         )
         return

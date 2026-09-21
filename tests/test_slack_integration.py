@@ -3,7 +3,7 @@ import asyncio
 from agent_builder.auth import principal
 from agent_builder.registry import Registry
 from agent_builder.service import AgentService
-from integrations.slack import _agent_builder_command, _agent_builder_mention, _agent_command, _mention_to_command, _modal_blocks, _normalize_share_target, _open_update_modal, _parse_key_values
+from integrations.slack import _agent_builder_command, _agent_builder_mention, _agent_command, _handle_update_agent_selected, _mention_to_command, _modal_blocks, _normalize_share_target, _open_update_modal, _parse_key_values
 
 
 def make_service(tmp_path):
@@ -146,7 +146,7 @@ def test_slack_allowed_user_gets_builder_user_grant_from_dotenv(tmp_path, monkey
 def test_slack_modal_uses_catalog_fields(tmp_path):
     service = make_service(tmp_path)
     blocks = _modal_blocks(service)
-    by_id = {b.get("block_id"): b for b in blocks}
+    by_id = _blocks_by_base(blocks)
     ids = [b.get("block_id") for b in blocks]
     assert by_id["model"]["element"]["type"] == "static_select"
     assert by_id["access_policy"].get("dispatch_action") is True
@@ -206,7 +206,7 @@ def test_update_access_shared_toggle_shows_share_fields_for_private_agent(tmp_pa
     service = make_service(tmp_path)
     actor = principal("slack", "U1", "T1")
     ag = service.create_agent(actor, {"display_name": "Private Update", "model": "m", "purpose": "old", "access_policy": "private"})
-    ids = [b.get("block_id") for b in _modal_blocks(service, mode="update", actor=actor, selected_agent_key=ag["profile_name"], include_share_fields=True, current_user_id="U1")]
+    ids = _base_ids(_modal_blocks(service, mode="update", actor=actor, selected_agent_key=ag["profile_name"], include_share_fields=True, current_user_id="U1"))
     assert "shared_slack_users" in ids
     assert "shared_users" in ids
     assert "private_owner" not in ids
@@ -216,7 +216,7 @@ def test_update_access_private_toggle_hides_share_fields_for_shared_agent(tmp_pa
     service = make_service(tmp_path)
     actor = principal("slack", "U1", "T1")
     ag = service.create_agent(actor, {"display_name": "Shared Update", "model": "m", "purpose": "old", "access_policy": "shared", "shared_users": ["slack:U2"]})
-    ids = [b.get("block_id") for b in _modal_blocks(service, mode="update", actor=actor, selected_agent_key=ag["profile_name"], include_share_fields=False, current_user_id="U1")]
+    ids = _base_ids(_modal_blocks(service, mode="update", actor=actor, selected_agent_key=ag["profile_name"], include_share_fields=False, current_user_id="U1"))
     assert "shared_slack_users" not in ids
     assert "shared_users" not in ids
     assert "private_owner" in ids
@@ -231,7 +231,7 @@ def test_update_modal_lists_only_accessible_agents_even_for_admin(tmp_path):
     mine = service.create_agent(owner, {"display_name": "Mine", "model": "m", "purpose": "mine"})
     theirs = service.create_agent(other, {"display_name": "Theirs", "model": "m", "purpose": "theirs"})
     blocks = _modal_blocks(service, mode="update", actor=owner, current_user_id="U1")
-    by_id = {b.get("block_id"): b for b in blocks}
+    by_id = _blocks_by_base(blocks)
     opts = by_id["agent_key"]["element"]["options"]
     values = [o["value"] for o in opts]
     assert mine["profile_name"] in values
@@ -249,9 +249,25 @@ def test_update_modal_lists_only_accessible_agents_even_for_admin(tmp_path):
 class FakeClient:
     def __init__(self):
         self.views = []
+        self.updates = []
 
     async def views_open(self, **kwargs):
         self.views.append(kwargs)
+
+    async def views_update(self, **kwargs):
+        self.updates.append(kwargs)
+
+
+def _base_id(block_id: str | None) -> str | None:
+    return str(block_id).split('__', 1)[0] if block_id is not None else None
+
+
+def _blocks_by_base(blocks):
+    return {_base_id(b.get('block_id')): b for b in blocks}
+
+
+def _base_ids(blocks):
+    return [_base_id(b.get('block_id')) for b in blocks]
 
 
 def test_update_command_without_fields_opens_native_update_modal(tmp_path):
@@ -264,7 +280,7 @@ def test_update_command_without_fields_opens_native_update_modal(tmp_path):
     view = client.views[-1]["view"]
     assert view["callback_id"] == "agent_builder_update"
     assert view["submit"]["text"] == "Update"
-    ids = [b.get("block_id") for b in view["blocks"]]
+    ids = _base_ids(view["blocks"])
     assert ids[0] == "agent_key"
     assert "display_name" not in ids
     assert ids.index("mcp_servers") < ids.index("advanced_options")
@@ -282,10 +298,82 @@ def test_updater_alias_opens_native_update_modal(tmp_path):
     view = client.views[-1]["view"]
     assert view["callback_id"] == "agent_builder_update"
     assert view["submit"]["text"] == "Update"
-    ids = [b.get("block_id") for b in view["blocks"]]
+    ids = _base_ids(view["blocks"])
     assert ids[0] == "agent_key"
     assert "display_name" not in ids
 
+
+
+def test_update_agent_selector_reloads_all_fields_for_selected_agent(tmp_path):
+    service = make_service(tmp_path)
+    actor = principal("slack", "U1", "T1")
+    first = service.create_agent(actor, {
+        "display_name": "First",
+        "model": "m",
+        "purpose": "first purpose",
+        "instructions": "first instructions",
+        "skills": ["demo-skill"],
+        "mcp_servers": [],
+        "risk_level": "human-approval",
+        "access_policy": "private",
+        "rbac": {
+            "install": True,
+            "role": "first-role",
+            "users": ["slack:U1"],
+            "toolsets": ["skill_view"],
+            "skills": ["demo-skill"],
+            "deny": ["terminal"],
+        },
+    })
+    second = service.create_agent(actor, {
+        "display_name": "Second",
+        "model": "m",
+        "purpose": "second purpose",
+        "instructions": "second instructions",
+        "skills": [],
+        "mcp_servers": ["demo-mcp"],
+        "risk_level": "autonomous",
+        "access_policy": "shared",
+        "shared_users": ["slack:U2"],
+        "rbac": {
+            "install": True,
+            "role": "second-role",
+            "users": ["slack:U1", "slack:U2"],
+            "toolsets": ["read_file"],
+            "skills": [],
+            "deny": ["execute_code"],
+        },
+    })
+    client = FakeClient()
+    view = {
+        "id": "VIEW",
+        "hash": "HASH",
+        "callback_id": "agent_builder_update",
+        "private_metadata": "U1",
+        "state": {"values": {
+            "agent_key": {"agent_key_selected": {"selected_option": {"value": first["profile_name"]}}},
+            "access_policy": {"access_policy_selected": {"selected_option": {"value": "private"}}},
+        }},
+    }
+    body = {"view": view, "user": {"id": "U1"}, "team": {"id": "T1"}}
+    action = {"selected_option": {"value": second["profile_name"]}}
+    async def ack(*args, **kwargs):
+        return None
+    asyncio.run(_handle_update_agent_selected(ack, body, action, client, service))
+    updated = client.updates[-1]["view"]
+    by_id = _blocks_by_base(updated["blocks"])
+    assert by_id["purpose"]["element"]["initial_value"] == "second purpose"
+    assert by_id["instructions"]["element"]["initial_value"] == "second instructions"
+    assert by_id["risk_level"]["element"]["initial_option"]["value"] == "autonomous"
+    assert by_id["skills"]["element"].get("initial_options", []) == []
+    assert {o["value"] for o in by_id["mcp_servers"]["element"]["initial_options"]} == {"demo-mcp"}
+    assert by_id["access_policy"]["element"]["initial_option"]["value"] == "shared"
+    assert "shared_slack_users" in by_id
+    assert by_id["shared_slack_users"]["element"]["initial_users"] == ["U2"]
+    assert by_id["rbac_role"]["element"]["initial_value"] == "second-role"
+    assert by_id["rbac_users"]["element"]["initial_value"] == "slack:U1,slack:U2"
+    assert {o["value"] for o in by_id["rbac_toolsets"]["element"]["initial_options"]} == {"read_file"}
+    assert {o["value"] for o in by_id["rbac_deny"]["element"]["initial_options"]} == {"execute_code"}
 
 def test_update_without_accessible_agents_explains_empty_update_list(tmp_path):
     service = make_service(tmp_path)
@@ -483,7 +571,7 @@ def test_update_modal_prefills_existing_rbac_rights(tmp_path):
     assert listed["rbac"]["role"] == "integra-assist-admin"
     assert listed["rbac"]["toolsets"] == ["skill_view", "read_file"]
     blocks = _modal_blocks(service, mode="update", actor=actor, selected_agent_key=ag["profile_name"], current_user_id="U1")
-    by_id = {b.get("block_id"): b for b in blocks}
+    by_id = _blocks_by_base(blocks)
     assert by_id["rbac_role"]["element"]["initial_value"] == "integra-assist-admin"
     assert "slack:U1" in by_id["rbac_users"]["element"]["initial_value"]
     assert by_id["rbac_bootstrap_admins"]["element"]["initial_value"] == "slack:U1"
