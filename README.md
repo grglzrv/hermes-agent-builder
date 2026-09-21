@@ -12,7 +12,7 @@ It provides:
 - **Dashboard UI tab**: `Agent Builder` for creating, selecting, updating, and bulk-deleting generated agents.
 - **Dashboard backend API**: registry, catalogs, approvals, audit log, update, delete.
 - **Host CLI**: `hermes agent-builder ...` for admin operations and automation.
-- **Telegram integration**: `/agent-builder` / `/agent_builder` creation and management flow, plus `/agent chat` routing helpers.
+- **Slack and Telegram integrations**: `/agent-builder` / `/agent_builder` creation and management flows, plus `/agent chat` routing helpers.
 - **Generated profile management**: creates `ssa-<slug>-<id>` profiles under the target Hermes home.
 - **Registry and audit**: SQLite state in `<HERMES_HOME>/plugin-data/agent-builder/registry.db`.
 - **Optional RBAC bootstrap**: can install/configure `hermes-rbac` into generated profiles when requested.
@@ -39,7 +39,7 @@ Restart surfaces that should pick up the plugin:
 # Dashboard UI/API plugin routes are mounted at dashboard startup.
 systemctl --user restart hermes-dashboard.service
 
-# Telegram/native message handlers are mounted at gateway startup.
+# Slack/Telegram native message handlers are mounted at gateway startup.
 # Run this from an external shell, not from inside a gateway-delivered Hermes turn.
 systemctl --user restart hermes-gateway.service
 # or: hermes gateway restart
@@ -111,10 +111,10 @@ Update an agent by registry id or profile name:
 ```bash
 hermes agent-builder update ssa-support-abc123 \
   --model openai:gpt-5.5 \
-  --purpose "Answer customer questions using Confluence and read-only CRM data" \
+  --purpose "Answer scoped operational questions for this team" \
   --instructions "Stay in scope. Cite sources. Ask before external changes." \
   --skills youtube-content,systematic-debugging \
-  --mcp-servers confluence,grafana-prod \
+  --mcp-servers grafana-prod \
   --access-policy shared \
   --autonomy agent \
   --shared-users telegram:123456,discord:987654
@@ -147,6 +147,23 @@ When the gateway is restarted with the plugin enabled:
 /agent-builder update <ssa-profile> purpose="..." model=provider:model autonomy=agent access=shared skills=a,b mcp_servers=x,y shared_users=telegram:123
 /agent-builder delete <ssa-profile>
 ```
+
+## Slack usage
+
+Configure Slack slash commands for `/agent-builder`, `/agent_builder`, and `/agent` in the Slack app manifest, then restart the gateway with the plugin enabled. Slack uses the same service/registry as Telegram and Dashboard.
+
+```text
+/agent-builder create name="Ops helper" model=nous:Hermes-4 purpose="Answer scoped operational questions"
+/agent-builder list
+/agent-builder catalog
+/agent-builder requests
+/agent-builder update <ssa-profile> purpose="..." model=provider:model autonomy=agent access=shared skills=a,b mcp_servers=x,y shared_users=slack:U123
+/agent-builder delete <ssa-profile>
+/agent chat <ssa-profile> [optional first message]
+/agent share <ssa-profile> slack:U123
+```
+
+Telegram supports an interactive `create` wizard. Slack slash commands are single-request, so `create` takes `key=value` fields.
 
 Agent chat helpers:
 
@@ -191,7 +208,8 @@ python3 -m py_compile \
   agent_builder/profile_manager.py \
   agent_builder/cli.py \
   dashboard/plugin_api.py \
-  integrations/telegram.py
+  integrations/telegram.py \
+  integrations/slack.py
 
 PYTHONPATH=$PWD uv run --with pytest --with pyyaml pytest -q
 node --check dashboard/dist/index.js
@@ -201,12 +219,13 @@ node --check dashboard/dist/index.js
 
 ```text
 plugin.yaml                 Native Hermes plugin manifest
-__init__.py                 register(ctx): tools, CLI, Telegram, skill registration
+__init__.py                 register(ctx): tools, CLI, Slack/Telegram, skill registration
 agent_builder/              Registry, service, profile generation, CLI helpers
 dashboard/manifest.json     Dashboard tab manifest
 dashboard/dist/             Prebuilt Dashboard UI assets
 dashboard/plugin_api.py     FastAPI routes under /api/plugins/agent-builder
 integrations/telegram.py    Telegram command and routing helpers
+integrations/slack.py       Slack slash-command and routing helpers
 skills/agent-builder/       Bundled Hermes skill
 tests/                      Plugin tests
 ```

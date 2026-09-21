@@ -79,6 +79,7 @@ async def _cmd(update, context, service, adapter=None):
             rows=[r for r in service.list_agents(actor) if r.get('status')=='active']
             await _send(update, 'Pick an agent to chat with:', _agent_keyboard(rows, prefix='ab:chat:')); return
         if args and args[0]=='catalog': await _send(update,_catalog_text(service)); return
+        if args and args[0]=='requests': await _send(update,_fmt_requests(service.pending_requests(actor))); return
         if args and args[0]=='update' and len(args)>=3:
             payload=_parse_update_args(args[2:])
             ag=service.update_agent(actor,args[1],payload)
@@ -91,11 +92,11 @@ async def _cmd(update, context, service, adapter=None):
             service.delete_agent(actor,args[1])
             await _send(update,'Deleted. Main Hermes agent selected.')
             return
-        if args and args[0]=='start' or not args:
+        if (args and args[0] in {'create','start'}) or not args:
             WIZ[_chat(update)]={'actor':actor,'step':0,'spec':{}}
             await _send(update,'Agent Builder wizard\nAgent name? Prefix generated as ssa- automatically.'); return
         if args and args[0]=='cancel': WIZ.pop(_chat(update),None); await _send(update,'Cancelled.'); return
-        await _send(update,'Commands: /agent_builder start | list | chat | catalog | update <ssa-profile> purpose="..." model=provider:model autonomy=agent access=shared skills=a,b mcp_servers=x,y shared_users=telegram:123 | delete <ssa-profile> | cancel')
+        await _send(update,'Commands: /agent_builder create | list | chat | catalog | update <ssa-profile> purpose="..." model=provider:model autonomy=agent access=shared skills=a,b mcp_servers=x,y shared_users=telegram:123 | delete <ssa-profile> | cancel')
     except Exception as e: await _send(update,f'Error: {e}')
 
 
@@ -136,12 +137,12 @@ async def _wizard_text(update, context, service, adapter=None):
             if st['step']<len(FIELDS):
                 if FIELDS[st['step']]=='model':
                     await _send(update,'Pick or type model from connected providers. Example: openai:gpt-5.5 or nous:Hermes-4', _model_keyboard(service)); return
-                prompt={'purpose':'Purpose? Example: Answer customer questions using Confluence and read-only CRM data.','model':'Model? Pick a button or type provider:model, e.g. openai:gpt-5.5 or nous:Hermes-4'}[FIELDS[st['step']]]; await _send(update,prompt); return
+                prompt={'purpose':'Purpose? Example: Answer scoped operational questions for this team or customer.','model':'Model? Pick a button or type provider:model, e.g. openai:gpt-5.5 or nous:Hermes-4'}[FIELDS[st['step']]]; await _send(update,prompt); return
             await _send(update,_catalog_text(service)+'\nSend comma-separated skills, or - for none. Example: youtube-content,systematic-debugging'); return
         if step==len(FIELDS):
             spec['skills']=[] if val=='-' else [x.strip() for x in val.split(',') if x.strip()]; st['step']+=1; await _send(update,'Send comma-separated MCP servers, or - for none. Example: confluence,grafana-prod'); return
         if step==len(FIELDS)+1:
-            spec['mcp_servers']=[] if val=='-' else [x.strip() for x in val.split(',') if x.strip()]; st['step']+=1; await _send(update,'Access policy: private or shared? Example: shared for a team/customer agent, private for owner-only.'); return
+            spec['mcp_servers']=[] if val=='-' else [x.strip() for x in val.split(',') if x.strip()]; st['step']+=1; await _send(update,'Access policy: private or shared? Example: shared for a team agent, private for owner-only.'); return
         if step==len(FIELDS)+2:
             spec['access_policy']='shared' if val.lower().startswith('shared') else 'private'; st['step']+=1; await _send(update,'Autonomy? human-approval = drafts/requires approval; agent = supervised routine actions; autonomous = end-to-end scoped workflows.', _choice_keyboard('ab:autonomy:', service.catalogs().get('autonomy_levels') or ['human-approval','agent','autonomous'])); return
         if step==len(FIELDS)+3:
@@ -247,5 +248,8 @@ def _choice_keyboard(prefix, values):
 def _fmt_list(rows):
     if not rows: return 'No authorized SSA agents.'
     return '\n'.join([f"{r['profile_name']} — {r['display_name']} — owner {r['owner_id']} — {r['status']}" for r in rows])
+def _fmt_requests(rows):
+    if not rows: return 'No pending approval requests.'
+    return '\n'.join([f"{r['id']} — {r['request_type']} — agent {r.get('agent_id') or ''} — requested by {r['requested_by']}" for r in rows])
 def _fmt_agent(a):
     return f"Agent created\nName: {a['display_name']}\nProfile: {a['profile_name']}\nOwner: {a['owner_id']}\nAccess: {a['access_policy']}\nStatus: {a['status']}"

@@ -45,6 +45,10 @@ def register(ctx):
         from integrations.telegram import register_telegram
         ctx.register_telegram_handler(lambda native, adapter: register_telegram(native, adapter, service))
 
+    if hasattr(ctx, 'register_platform_handler'):
+        from integrations.slack import register_slack
+        ctx.register_platform_handler('slack', lambda native, adapter: register_slack(native, adapter, service))
+
     try:
         skills_dir = Path(__file__).parent / 'skills'
         for child in sorted(skills_dir.iterdir()):

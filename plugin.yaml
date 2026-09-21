@@ -1,10 +1,10 @@
 name: agent-builder
 version: 0.1.0
 api_version: 1
-description: Secure self-service Hermes profile registry, Dashboard UI, Telegram router, and host CLI
+description: Secure self-service Hermes profile registry, Dashboard UI, Slack/Telegram routers, and host CLI
 homepage: https://github.com/grglzrv/hermes-agent-builder
 license: MIT
-tags: [agents, profiles, dashboard, telegram, rbac, sqlite]
+tags: [agents, profiles, dashboard, telegram, slack, rbac, sqlite]
 provides_tools:
   - agent_builder_list
   - agent_builder_get
