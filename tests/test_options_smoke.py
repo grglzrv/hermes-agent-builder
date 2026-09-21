@@ -96,6 +96,72 @@ def test_create_agent_with_all_options_and_rbac_install(tmp_path):
     assert acl["teams:user@example.com"] == "user"
 
 
+def test_rbac_full_config_writes_inheritance_default_and_identities(tmp_path):
+    s, a, h = service(tmp_path)
+    src = rbac_source(tmp_path)
+    ag = s.create_agent(a, {
+        "display_name": "Full RBAC Agent",
+        "model": "openai:gpt-5.5",
+        "rbac": {
+            "install": True,
+            "source": str(src),
+            "role": "dev",
+            "extends": ["viewer"],
+            "deny": ["terminal"],
+            "users": ["slack:U123"],
+            "bootstrap_admins": ["telegram:1"],
+            "toolsets": ["terminal", "web_search"],
+            "skills": ["youtube-content"],
+            "default_roles": ["guest"],
+            "extra_roles": {
+                "viewer": {"toolsets": ["web_search", "skill_view"], "skills": ["youtube-content"]},
+                "guest": {"toolsets": [], "skills": []},
+            },
+            "identity_persons": {
+                "george": {
+                    "canonical": "telegram:1",
+                    "identities": ["telegram:1", "slack:U123"],
+                }
+            },
+        },
+    })
+    plugin = h / "profiles" / ag["profile_name"] / "plugins" / "hermes-rbac"
+    roles = yaml.safe_load((plugin / "roles.yaml").read_text())
+    assert roles["roles"]["dev"]["extends"] == ["viewer"]
+    assert roles["roles"]["dev"]["deny"] == ["terminal"]
+    assert roles["roles"]["viewer"]["toolsets"] == ["web_search", "skill_view"]
+    assert roles["users"]["slack:U123"] == ["dev"]
+    assert roles["users"]["*"] == ["guest"]
+    identities = yaml.safe_load((plugin / "identities.yaml").read_text())
+    assert identities["persons"]["george"]["canonical"] == "telegram:1"
+    assert identities["persons"]["george"]["identities"] == ["telegram:1", "slack:U123"]
+
+
+def test_rbac_full_dashboard_yaml_fields_are_accepted(tmp_path):
+    s, a, h = service(tmp_path)
+    src = rbac_source(tmp_path)
+    ag = s.create_agent(a, {
+        "display_name": "Dashboard RBAC Agent",
+        "model": "openai:gpt-5.5",
+        "rbac": {
+            "install": True,
+            "source": str(src),
+            "role": "dev",
+            "users": "slack:U123",
+            "extends": "viewer",
+            "default_roles": "guest",
+            "extra_roles": "viewer:\n  toolsets: [web_search, skill_view]\n  skills: [youtube-content]\nguest:\n  toolsets: []\n  skills: []\n",
+            "identity_persons": "george:\n  canonical: telegram:1\n  identities:\n    - telegram:1\n    - slack:U123\n",
+        },
+    })
+    plugin = h / "profiles" / ag["profile_name"] / "plugins" / "hermes-rbac"
+    roles = yaml.safe_load((plugin / "roles.yaml").read_text())
+    assert roles["roles"]["dev"]["extends"] == ["viewer"]
+    assert roles["users"]["*"] == ["guest"]
+    identities = yaml.safe_load((plugin / "identities.yaml").read_text())
+    assert identities["persons"]["george"]["identities"] == ["telegram:1", "slack:U123"]
+
+
 def test_select_chat_binding_returns_agent(tmp_path):
     s, a, _h = service(tmp_path)
     ag = s.create_agent(a, {"display_name": "Chat Target", "model": "nous:Hermes-4"})

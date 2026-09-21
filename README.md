@@ -195,6 +195,36 @@ Use `platform:id` values:
 - Users: `telegram:123456`, `discord:987654`, `slack:U123`
 - Toolsets: `web_search`, `web_extract`, `skill_view`, `read_file`, `mcp__*`
 - Skills: selected Hermes skill IDs, or leave blank to reuse selected agent skills
+- Inheritance: `extends: viewer` lets a role inherit another role's toolsets/skills.
+- Deny rules: `deny: terminal,write_file` removes inherited tool/toolset patterns.
+- Default users: `default_roles: guest` writes `users: {"*": [guest]}` for unknown users.
+- Identity linking: `identity_persons` writes `identities.yaml` so one human can map Telegram + Slack + Discord to a canonical identity.
+
+Example full RBAC payload:
+
+```json
+{
+  "install": true,
+  "role": "dev",
+  "extends": ["viewer"],
+  "deny": ["terminal"],
+  "users": ["slack:U123"],
+  "bootstrap_admins": ["telegram:123456"],
+  "toolsets": ["web_search", "web_extract", "skill_view", "mcp__github__*"],
+  "skills": ["github", "test-driven-development"],
+  "default_roles": ["guest"],
+  "extra_roles": {
+    "viewer": {"toolsets": ["web_search", "skill_view"], "skills": ["youtube-content"]},
+    "guest": {"toolsets": [], "skills": []}
+  },
+  "identity_persons": {
+    "george": {
+      "canonical": "telegram:123456",
+      "identities": ["telegram:123456", "slack:U123"]
+    }
+  }
+}
+```
 
 ## Development and verification
 
@@ -207,6 +237,7 @@ python3 -m py_compile \
   agent_builder/registry.py \
   agent_builder/profile_manager.py \
   agent_builder/cli.py \
+  agent_builder/rbac.py \
   dashboard/plugin_api.py \
   integrations/telegram.py \
   integrations/slack.py

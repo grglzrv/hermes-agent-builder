@@ -30,11 +30,31 @@ def _safe_list(values):
     return [str(x).strip() for x in values if str(x).strip()]
 
 
+def _safe_mapping(value, label):
+    if value in (None, ""):
+        return {}
+    if isinstance(value, str):
+        try:
+            value = yaml.safe_load(value) or {}
+        except yaml.YAMLError as e:
+            raise ValidationError(f"{label} must be valid YAML/JSON") from e
+    if not isinstance(value, dict):
+        raise ValidationError(f"{label} must be a mapping")
+    return value
+
+
 def _validate_role_name(name: str) -> str:
     name = str(name or "").strip()
     if not name or not all(c.isalnum() or c in "_-" for c in name):
         raise ValidationError("invalid RBAC role name")
     return name
+
+
+def _validate_glob_item(value: str, label: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        raise ValidationError(f"invalid {label}")
+    return value
 
 
 def _validate_user_key(key: str) -> str:
@@ -47,6 +67,38 @@ def _validate_user_key(key: str) -> str:
     if platform not in {"discord", "telegram", "slack", "teams", "whatsapp", "local", "dashboard"} or not user_id:
         raise ValidationError("invalid RBAC user key")
     return key
+
+
+def _normalize_extra_roles(value) -> dict:
+    roles = {}
+    for raw_name, raw_spec in _safe_mapping(value, "RBAC extra_roles").items():
+        name = _validate_role_name(raw_name)
+        if raw_spec is None:
+            raw_spec = {}
+        if not isinstance(raw_spec, dict):
+            raise ValidationError("RBAC extra role specs must be mappings")
+        roles[name] = {
+            "extends": [_validate_role_name(x) for x in _safe_list(raw_spec.get("extends"))],
+            "toolsets": [_validate_glob_item(x, "RBAC toolset") for x in _safe_list(raw_spec.get("toolsets"))],
+            "skills": [_validate_glob_item(x, "RBAC skill") for x in _safe_list(raw_spec.get("skills"))],
+            "deny": [_validate_glob_item(x, "RBAC deny") for x in _safe_list(raw_spec.get("deny"))],
+            "bypass_sensitive_paths": bool(raw_spec.get("bypass_sensitive_paths")),
+        }
+    return roles
+
+
+def _normalize_identity_persons(value) -> dict:
+    persons = {}
+    for raw_id, raw_spec in _safe_mapping(value, "RBAC identity_persons").items():
+        person_id = _validate_role_name(raw_id)
+        if not isinstance(raw_spec, dict):
+            raise ValidationError("RBAC identity person specs must be mappings")
+        canonical = _validate_user_key(str(raw_spec.get("canonical") or ""))
+        identities = [_validate_user_key(x) for x in _safe_list(raw_spec.get("identities"))]
+        if canonical not in identities:
+            raise ValidationError("RBAC identity canonical must be listed in identities")
+        persons[person_id] = {"canonical": canonical, "identities": identities}
+    return persons
 
 
 def normalize_rbac_spec(spec: dict | None, *, selected_skills=()) -> dict | None:
@@ -68,6 +120,11 @@ def normalize_rbac_spec(spec: dict | None, *, selected_skills=()) -> dict | None
         "bootstrap_admins": bootstrap_admins,
         "toolsets": toolsets,
         "skills": skills,
+        "extends": [_validate_role_name(x) for x in _safe_list(spec.get("extends"))],
+        "deny": [_validate_glob_item(x, "RBAC deny") for x in _safe_list(spec.get("deny"))],
+        "default_roles": [_validate_role_name(x) for x in _safe_list(spec.get("default_roles"))],
+        "extra_roles": _normalize_extra_roles(spec.get("extra_roles")),
+        "identity_persons": _normalize_identity_persons(spec.get("identity_persons")),
         "bypass_sensitive_paths": bool(spec.get("bypass_sensitive_paths")),
         "source": _normalize_source(spec.get("source")),
     }
@@ -76,19 +133,42 @@ def normalize_rbac_spec(spec: dict | None, *, selected_skills=()) -> dict | None
 def roles_yaml(spec: dict) -> dict:
     role = spec["role"]
     users = {u: [role] for u in spec.get("users", [])}
+    if spec.get("default_roles"):
+        users["*"] = list(spec.get("default_roles", []))
+    roles = {
+        "admin": {"toolsets": ["*"], "skills": ["*"], "bypass_sensitive_paths": True},
+    }
+    for name, role_spec in (spec.get("extra_roles") or {}).items():
+        entry = {
+            "toolsets": list(role_spec.get("toolsets", [])),
+            "skills": list(role_spec.get("skills", [])),
+            "bypass_sensitive_paths": bool(role_spec.get("bypass_sensitive_paths")),
+        }
+        if role_spec.get("extends"):
+            entry["extends"] = list(role_spec["extends"])
+        if role_spec.get("deny"):
+            entry["deny"] = list(role_spec["deny"])
+        roles[name] = entry
+    selected = {
+        "toolsets": list(spec.get("toolsets", [])),
+        "skills": list(spec.get("skills", [])),
+        "bypass_sensitive_paths": bool(spec.get("bypass_sensitive_paths")),
+    }
+    if spec.get("extends"):
+        selected["extends"] = list(spec["extends"])
+    if spec.get("deny"):
+        selected["deny"] = list(spec["deny"])
+    roles[role] = selected
     return {
         "fail_closed": True,
         "bootstrap_admins": list(spec.get("bootstrap_admins", [])),
-        "roles": {
-            "admin": {"toolsets": ["*"], "skills": ["*"], "bypass_sensitive_paths": True},
-            role: {
-                "toolsets": list(spec.get("toolsets", [])),
-                "skills": list(spec.get("skills", [])),
-                "bypass_sensitive_paths": bool(spec.get("bypass_sensitive_paths")),
-            },
-        },
+        "roles": roles,
         "users": users,
     }
+
+
+def identities_yaml(spec: dict) -> dict:
+    return {"persons": dict(spec.get("identity_persons") or {})}
 
 
 def _copy_or_clone_plugin(source: str, dest: Path):
@@ -126,8 +206,6 @@ def install_rbac(profile_home: Path, spec: dict) -> dict:
     dest = plugins_dir / RBAC_PLUGIN
     _copy_or_clone_plugin(spec.get("source") or RBAC_REPO, dest)
     (dest / "roles.yaml").write_text(yaml.safe_dump(roles_yaml(spec), sort_keys=False, allow_unicode=True))
-    identities = dest / "identities.yaml"
-    if not identities.exists():
-        identities.write_text("persons: {}\n")
+    (dest / "identities.yaml").write_text(yaml.safe_dump(identities_yaml(spec), sort_keys=False, allow_unicode=True))
     _enable_plugin(profile_home)
     return {"plugin_dir": str(dest), "roles_path": str(dest / "roles.yaml")}
