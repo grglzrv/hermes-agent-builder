@@ -262,6 +262,85 @@ def _enable_plugin(profile_home: Path):
     cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 
 
+def _dump_mapping_for_form(value: dict) -> str:
+    if not value:
+        return ""
+    return yaml.safe_dump(value, sort_keys=False, allow_unicode=True).strip()
+
+
+def read_rbac_spec(profile_home: Path) -> dict | None:
+    """Return existing hermes-rbac settings in Agent Builder form shape.
+
+    The update UIs must show the *current* generated profile rights instead of
+    opening with generic defaults. This reads the profile-local hermes-rbac
+    roles.yaml/identities.yaml and reconstructs the normalized spec shape used
+    by normalize_rbac_spec(). Unknown/extra role mappings are preserved in
+    extra_roles/user_roles YAML text fields for round-trip visibility.
+    """
+    profile_home = Path(profile_home)
+    plugin_dir = profile_home / "plugins" / RBAC_PLUGIN
+    roles_path = plugin_dir / "roles.yaml"
+    if not roles_path.exists():
+        return None
+    doc = _read_yaml_mapping(roles_path)
+    roles = doc.get("roles") or {}
+    users = doc.get("users") or {}
+    if not isinstance(roles, dict) or not isinstance(users, dict):
+        return None
+
+    def _roles_for_user(value):
+        return _safe_list(value)
+
+    user_role_names = {r for value in users.values() for r in _roles_for_user(value)}
+    candidates = [r for r in user_role_names if r in roles and r != "admin"]
+    if not candidates:
+        candidates = [r for r in roles if r != "admin"]
+    # Prefer a concrete custom/admin-looking role over generic inherited base roles.
+    candidates = sorted(candidates, key=lambda r: (r in {"viewer", "guest", "user"}, r))
+    role = candidates[0] if candidates else "viewer"
+    raw_selected = roles.get(role)
+    selected: dict = raw_selected if isinstance(raw_selected, dict) else {}
+
+    selected_users = []
+    default_roles = []
+    passthrough_users = {}
+    for user, raw_roles in users.items():
+        role_list = _roles_for_user(raw_roles)
+        if user == "*":
+            default_roles = role_list
+        elif role_list == [role] or (role in role_list and len(role_list) == 1):
+            selected_users.append(str(user))
+        else:
+            passthrough_users[str(user)] = role_list
+
+    extra_roles = {
+        name: spec for name, spec in roles.items()
+        if name not in {"admin", role}
+    }
+    identities = _read_yaml_mapping(plugin_dir / "identities.yaml")
+    persons = identities.get("persons") if isinstance(identities, dict) else {}
+    if not isinstance(persons, dict):
+        persons = {}
+
+    return {
+        "install": True,
+        "role": role,
+        "users": selected_users,
+        "bootstrap_admins": _safe_list(doc.get("bootstrap_admins")),
+        "toolsets": _safe_list(selected.get("toolsets")),
+        "skills": _safe_list(selected.get("skills")),
+        "extends": _safe_list(selected.get("extends")),
+        "deny": _safe_list(selected.get("deny")),
+        "default_roles": default_roles,
+        "extra_roles": _dump_mapping_for_form(extra_roles),
+        "user_roles": _dump_mapping_for_form(passthrough_users),
+        "identity_persons": _dump_mapping_for_form(persons),
+        "fail_closed": bool(doc.get("fail_closed", True)),
+        "bypass_sensitive_paths": bool(selected.get("bypass_sensitive_paths")),
+        "roles_path": str(roles_path),
+    }
+
+
 def install_rbac(profile_home: Path, spec: dict) -> dict:
     profile_home = Path(profile_home)
     plugins_dir = profile_home / "plugins"

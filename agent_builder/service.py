@@ -7,7 +7,7 @@ from .auth import authorize, principal
 from .catalog import list_mcps, list_models, list_rbac_toolsets, list_skills, parse_model_choice
 from .errors import ApprovalRequired, AuthorizationError, NotFoundError, ValidationError
 from .profile_manager import ProfileManager
-from .rbac import normalize_rbac_spec
+from .rbac import normalize_rbac_spec, read_rbac_spec
 from .validators import display_name, slug, text, selections
 
 AUTONOMY_LEVELS={'human-approval','autonomous','agent'}
@@ -125,12 +125,30 @@ class AgentService:
         self.registry.upsert_principal(actor)
         if not self.registry.is_admin(actor.id): raise AuthorizationError('access denied')
         return self.registry.pending()
+    def _attach_runtime_state(self, row):
+        try:
+            row=dict(row)
+            profile_name=row.get('profile_name')
+            if profile_name:
+                row['rbac']=read_rbac_spec(self.pm.profile_path(profile_name))
+            acl=self.registry.acl(row['id']) if row.get('id') else []
+            row['acl']=acl
+            non_owner=[x for x in acl if x.get('role')!='owner' and x.get('principal_type')=='user']
+            row['access_policy']='shared' if non_owner else 'private'
+            row['shared_users']=[x.get('principal_id') for x in non_owner if x.get('principal_id')]
+        except Exception:
+            row=dict(row)
+            row.setdefault('rbac',None)
+            row.setdefault('acl',[])
+            row.setdefault('shared_users',[])
+        return row
     def list_agents(self, actor):
-        self.registry.upsert_principal(actor); return self.registry.list_agents(actor.id, self.registry.is_admin(actor.id))
+        self.registry.upsert_principal(actor)
+        return [self._attach_runtime_state(row) for row in self.registry.list_agents(actor.id, self.registry.is_admin(actor.id))]
     def get_agent(self, actor, key):
         ag=self.registry.get_agent(key)
         if not ag: raise NotFoundError('agent not found')
-        authorize(self.registry,actor,'agent.read',ag['id']); ag['acl']=self.registry.acl(ag['id']); return ag
+        authorize(self.registry,actor,'agent.read',ag['id']); ag=self._attach_runtime_state(ag); return ag
     def update_agent(self, actor, key, spec):
         ag=self.registry.get_agent(key)
         if not ag: raise NotFoundError('agent not found')
@@ -147,12 +165,14 @@ class AgentService:
         if 'risk_level' in spec or 'autonomy_level' in spec:
             risk=normalize_autonomy(spec.get('risk_level') if 'risk_level' in spec else spec.get('autonomy_level'))
             fields['risk_level']=risk
+        valid_skills=list_skills(self.pm.home); valid_mcps=list_mcps(self.pm.home)
+        skills=None; mcps=None; shared=None
         if 'access_policy' in spec:
             ap=spec.get('access_policy') or 'private'
             if ap not in {'private','shared'}: raise ValidationError('invalid access policy')
             fields['access_policy']=ap
-        valid_skills=list_skills(self.pm.home); valid_mcps=list_mcps(self.pm.home)
-        skills=None; mcps=None; shared=None
+            if ap == 'private' and 'shared_users' not in spec:
+                shared=[]
         if 'shared_users' in spec:
             shared=normalize_share_users(spec.get('shared_users'))
         if 'skills' in spec:

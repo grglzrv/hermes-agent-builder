@@ -63,3 +63,28 @@ def test_cli_update_and_delete_existing_agent(tmp_path, capsys):
     assert deleted["deleted"] == ag["id"]
     assert svc.registry.get_agent(ag["id"], include_deleted=True)["status"] == "deleted"
     assert not (h / "profiles" / ag["profile_name"]).exists()
+
+
+def test_access_policy_is_effective_from_acl_and_private_clears_shares(tmp_path):
+    h, ag = seed(tmp_path)
+    svc = AgentService(Registry(h / "plugin-data" / "agent-builder" / "registry.db"), h, allowed_models=["m"])
+    owner = principal("telegram", "1")
+
+    # A stale stored shared flag without non-owner ACL entries should render as private.
+    svc.registry.update_agent(ag["id"], {"access_policy": "shared"})
+    current = svc.get_agent(owner, ag["id"])
+    assert current["access_policy"] == "private"
+    assert current["shared_users"] == []
+
+    # Shared policy becomes shared only when non-owner user ACL entries exist.
+    svc.update_agent(owner, ag["id"], {"access_policy": "shared", "shared_users": ["slack:U123"]})
+    shared = svc.get_agent(owner, ag["id"])
+    assert shared["access_policy"] == "shared"
+    assert shared["shared_users"] == ["slack:U123"]
+
+    # Switching back to private with no shared_users field revokes old shares.
+    svc.update_agent(owner, ag["id"], {"access_policy": "private"})
+    private = svc.get_agent(owner, ag["id"])
+    assert private["access_policy"] == "private"
+    assert private["shared_users"] == []
+    assert {x["role"] for x in private["acl"]} == {"owner"}

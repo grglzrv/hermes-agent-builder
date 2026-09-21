@@ -118,10 +118,12 @@ def _normalize_share_target(actor, value: str) -> str:
     if not raw:
         raise ValueError('share target is required')
     if raw.startswith('slack:'):
+        # Slack share targets are always slack:<member_id>. The team/workspace
+        # id (T...) from Slack URLs is not part of the Agent Builder identity.
         member = raw.split(':', 1)[1].strip()
-        if actor.scope and member.startswith(actor.scope + ':'):
-            return f'slack:{member}'
-        return principal('slack', member, scope=actor.scope).id
+        if ':' in member:
+            member = member.split(':')[-1].strip()
+        return principal('slack', member).id
     if ':' in raw:
         platform, user_id = raw.split(':', 1)
         return principal(platform, user_id).id
@@ -554,6 +556,7 @@ def _advanced_modal_blocks(service=None, *, include_share_fields: bool | None = 
     if include_share_fields is None:
         include_share_fields = False
     initial = selected_agent or {}
+    current_rbac = initial.get('rbac') or {}
     blocks: list[dict[str, Any]] = []
     if mode == 'update':
         agent_block = _static_select_block('agent_key', 'Agent to update', agent_options, placeholder='Select an existing agent you own or can access', initial_value=(initial.get('profile_name') or selected_agent_key))
@@ -640,7 +643,7 @@ def _advanced_modal_blocks(service=None, *, include_share_fields: bool | None = 
                 'type': 'checkboxes',
                 'action_id': 'value',
                 'options': [_option('install', 'Install/update hermes-rbac in generated profile')],
-                'initial_options': [_option('install', 'Install/update hermes-rbac in generated profile')],
+                'initial_options': [_option('install', 'Install/update hermes-rbac in generated profile')] if current_rbac.get('install', True) else [],
             },
         },
         {
@@ -648,18 +651,18 @@ def _advanced_modal_blocks(service=None, *, include_share_fields: bool | None = 
             'block_id': 'rbac_fail_closed',
             'label': {'type': 'plain_text', 'text': 'RBAC fail closed'},
             'hint': {'type': 'plain_text', 'text': 'Required. If RBAC config is invalid or a user is unknown, deny access instead of accidentally allowing actions.'},
-            'element': {'type': 'checkboxes', 'action_id': 'value', 'options': [_option('fail_closed', 'Fail closed on config errors / unknown users')], 'initial_options': [_option('fail_closed', 'Fail closed on config errors / unknown users')]},
+            'element': {'type': 'checkboxes', 'action_id': 'value', 'options': [_option('fail_closed', 'Fail closed on config errors / unknown users')], 'initial_options': [_option('fail_closed', 'Fail closed on config errors / unknown users')] if current_rbac.get('fail_closed', True) else []},
         },
-        _input_block('rbac_role', 'Role', placeholder='viewer', hint='Required. Main role assigned to the owner/shared users.', initial_value='viewer'),
-        _input_block('rbac_users', 'Users', optional=True, placeholder='telegram:123456, discord:987654, slack:U123, teams:user@example.com', hint='Comma-separated platform:id values assigned to the selected role. Current Slack user is always added automatically.'),
-        _multi_select_block('rbac_deny', 'Deny toolsets', rbac_toolset_options, optional=True, placeholder='Select denied toolsets') if rbac_toolset_options else _input_block('rbac_deny', 'Deny toolsets', optional=True, placeholder='terminal, write_file', hint='Comma-separated tool/toolset patterns denied even if inherited.'),
-        _input_block('rbac_bootstrap_admins', 'Bootstrap admins', optional=True, placeholder='telegram:123456, slack:U123', hint='Break-glass admins, usually yourself.'),
-        _multi_select_block('rbac_toolsets', 'RBAC toolsets', rbac_toolset_options, optional=False, placeholder='Select RBAC toolsets') if rbac_toolset_options else _input_block('rbac_toolsets_text', 'RBAC toolsets', optional=True, placeholder='web_search,web_extract,skill_view'),
-        _multi_select_block('rbac_skills', 'RBAC skills', skill_options, optional=False, placeholder='Select RBAC skills', initial_values=selected_skills) if skill_options else _input_block('rbac_skills_text', 'RBAC skills', optional=True, placeholder='Comma-separated skill ids', initial_value=','.join(selected_skills)),
+        _input_block('rbac_role', 'Role', placeholder='viewer', hint='Required. Main role assigned to the owner/shared users.', initial_value=current_rbac.get('role') or 'viewer'),
+        _input_block('rbac_users', 'Users', optional=True, placeholder='telegram:123456, discord:987654, slack:U123, teams:user@example.com', hint='Comma-separated platform:id values assigned to the selected role. Current Slack user is always added automatically.', initial_value=','.join(current_rbac.get('users') or [])),
+        _multi_select_block('rbac_deny', 'Deny toolsets', rbac_toolset_options, optional=True, placeholder='Select denied toolsets', initial_values=current_rbac.get('deny') or []) if rbac_toolset_options else _input_block('rbac_deny', 'Deny toolsets', optional=True, placeholder='terminal, write_file', hint='Comma-separated tool/toolset patterns denied even if inherited.', initial_value=','.join(current_rbac.get('deny') or [])),
+        _input_block('rbac_bootstrap_admins', 'Bootstrap admins', optional=True, placeholder='telegram:123456, slack:U123', hint='Break-glass admins, usually yourself.', initial_value=','.join(current_rbac.get('bootstrap_admins') or [])),
+        _multi_select_block('rbac_toolsets', 'RBAC toolsets', rbac_toolset_options, optional=False, placeholder='Select RBAC toolsets', initial_values=current_rbac.get('toolsets') or []) if rbac_toolset_options else _input_block('rbac_toolsets_text', 'RBAC toolsets', optional=True, placeholder='web_search,web_extract,skill_view', initial_value=','.join(current_rbac.get('toolsets') or [])),
+        _multi_select_block('rbac_skills', 'RBAC skills', skill_options, optional=False, placeholder='Select RBAC skills', initial_values=current_rbac.get('skills') or selected_skills) if skill_options else _input_block('rbac_skills_text', 'RBAC skills', optional=True, placeholder='Comma-separated skill ids', initial_value=','.join(current_rbac.get('skills') or selected_skills)),
         _static_select_block('rbac_bypass_sensitive_paths', 'Sensitive path protection', [
             _option('protect', 'Protect sensitive paths (recommended)'),
             _option('bypass', 'Bypass sensitive path protection'),
-        ], optional=False, placeholder='Choose sensitive path policy'),
+        ], optional=False, placeholder='Choose sensitive path policy', initial_value=('bypass' if current_rbac.get('bypass_sensitive_paths') else 'protect')),
         {
             'type': 'input',
             'block_id': 'rbac_advanced_options',
@@ -676,12 +679,12 @@ def _advanced_modal_blocks(service=None, *, include_share_fields: bool | None = 
     ])
     if include_rbac_advanced_fields:
         blocks.extend([
-            _input_block('rbac_extends', 'Extends', optional=True, placeholder='viewer', hint='Comma-separated parent roles for inheritance.'),
-            _input_block('rbac_default_roles', 'Default roles for unknown users', optional=True, placeholder='guest', hint='Optional wildcard * user. Example: guest'),
-            _input_block('rbac_extra_roles', 'Extra roles YAML/JSON', multiline=True, optional=True, placeholder='viewer:\n  toolsets: [web_search, skill_view]\n  skills: [youtube-content]\nguest:\n  toolsets: []\n  skills: []'),
-            _input_block('rbac_user_roles', 'Explicit user role map YAML/JSON', multiline=True, optional=True, placeholder='slack:U123: [dev, viewer]\ndiscord:456: guest'),
-            _input_block('rbac_skills_text', 'Additional RBAC skills', optional=True, placeholder='research/research-paper-writing, devops/sdlc-review', hint='Optional comma-separated skills not visible in the first 100 Slack picker options.'),
-            _input_block('rbac_identity_persons', 'Cross-platform identities YAML/JSON', multiline=True, optional=True, placeholder='george:\n  canonical: telegram:123456\n  identities:\n    - telegram:123456\n    - slack:U123'),
+            _input_block('rbac_extends', 'Extends', optional=True, placeholder='viewer', hint='Comma-separated parent roles for inheritance.', initial_value=','.join(current_rbac.get('extends') or [])),
+            _input_block('rbac_default_roles', 'Default roles for unknown users', optional=True, placeholder='guest', hint='Optional wildcard * user. Example: guest', initial_value=','.join(current_rbac.get('default_roles') or [])),
+            _input_block('rbac_extra_roles', 'Extra roles YAML/JSON', multiline=True, optional=True, placeholder='viewer:\n  toolsets: [web_search, skill_view]\n  skills: [youtube-content]\nguest:\n  toolsets: []\n  skills: []', initial_value=current_rbac.get('extra_roles') or None),
+            _input_block('rbac_user_roles', 'Explicit user role map YAML/JSON', multiline=True, optional=True, placeholder='slack:U123: [dev, viewer]\ndiscord:456: guest', initial_value=current_rbac.get('user_roles') or None),
+            _input_block('rbac_skills_text', 'Additional RBAC skills', optional=True, placeholder='research/research-paper-writing, devops/sdlc-review', hint='Optional comma-separated skills not visible in the first 100 Slack picker options.', initial_value=','.join(current_rbac.get('skills') or [])),
+            _input_block('rbac_identity_persons', 'Cross-platform identities YAML/JSON', multiline=True, optional=True, placeholder='george:\n  canonical: telegram:123456\n  identities:\n    - telegram:123456\n    - slack:U123', initial_value=current_rbac.get('identity_persons') or None),
         ])
     return blocks
 

@@ -3,7 +3,7 @@ import asyncio
 from agent_builder.auth import principal
 from agent_builder.registry import Registry
 from agent_builder.service import AgentService
-from integrations.slack import _agent_builder_command, _agent_builder_mention, _agent_command, _mention_to_command, _modal_blocks, _open_update_modal, _parse_key_values
+from integrations.slack import _agent_builder_command, _agent_builder_mention, _agent_command, _mention_to_command, _modal_blocks, _normalize_share_target, _open_update_modal, _parse_key_values
 
 
 def make_service(tmp_path):
@@ -61,7 +61,7 @@ def test_parse_key_values_keeps_quoted_values_and_aliases():
     assert payload["shared_users"] == ["slack:U2", "telegram:3"]
 
 
-def test_slack_create_and_list_use_scoped_slack_principal(tmp_path):
+def test_slack_create_and_list_use_member_id_principal(tmp_path):
     service = make_service(tmp_path)
     rec = Recorder()
     asyncio.run(_agent_builder_command(
@@ -73,7 +73,7 @@ def test_slack_create_and_list_use_scoped_slack_principal(tmp_path):
     assert rec.acked is True
     assert "Agent created" in rec.responses[-1][0]
     rows = service.list_agents(principal("slack", "U1", "T1"))
-    assert rows[0]["owner_id"] == "slack:T1:U1"
+    assert rows[0]["owner_id"] == "slack:U1"
 
     rec2 = Recorder()
     asyncio.run(_agent_builder_command(rec2.ack, rec2.respond, command('list'), service))
@@ -441,7 +441,7 @@ def test_agent_builder_profile_router_stamps_bound_thread_profile(tmp_path):
     assert adapter.client.messages[-1] == {"channel": "C1", "thread_ts": "111.222", "text": f"profile={ag['profile_name']}"}
 
 
-def test_agent_share_accepts_profile_display_or_short_name_and_scopes_slack_member(tmp_path):
+def test_agent_share_accepts_profile_display_or_short_name_and_uses_slack_member_id(tmp_path):
     service = make_service(tmp_path)
     actor = principal("slack", "U1", "T1")
     ag = service.create_agent(actor, {"display_name": "Test", "model": "m"})
@@ -450,7 +450,7 @@ def test_agent_share_accepts_profile_display_or_short_name_and_scopes_slack_memb
         rec = Recorder()
         asyncio.run(_agent_command(rec.ack, rec.respond, command(f'share {key} slack:U2'), service, adapter=None))
         assert "Shared" in rec.responses[-1][0]
-        assert service.registry.get_role(ag["id"], "slack:T1:U2") == "user"
+        assert service.registry.get_role(ag["id"], "slack:U2") == "user"
 
 
 def test_agent_share_missing_agent_reports_not_found_not_typeerror(tmp_path):
@@ -459,3 +459,40 @@ def test_agent_share_missing_agent_reports_not_found_not_typeerror(tmp_path):
     asyncio.run(_agent_command(rec.ack, rec.respond, command('share ssa-missing slack:U2'), service, adapter=None))
     assert "agent not found" in rec.responses[-1][0]
     assert "NoneType" not in rec.responses[-1][0]
+
+
+def test_update_modal_prefills_existing_rbac_rights(tmp_path):
+    service = make_service(tmp_path)
+    actor = principal("slack", "U1", "T1")
+    ag = service.create_agent(actor, {
+        "display_name": "RBAC Visible",
+        "model": "m",
+        "purpose": "old",
+        "rbac": {
+            "install": True,
+            "role": "integra-assist-admin",
+            "users": ["slack:U1"],
+            "bootstrap_admins": ["slack:U1"],
+            "toolsets": ["skill_view", "read_file"],
+            "skills": ["demo-skill"],
+            "deny": ["terminal"],
+            "fail_closed": True,
+        },
+    })
+    listed = service.list_agents(actor)[0]
+    assert listed["rbac"]["role"] == "integra-assist-admin"
+    assert listed["rbac"]["toolsets"] == ["skill_view", "read_file"]
+    blocks = _modal_blocks(service, mode="update", actor=actor, selected_agent_key=ag["profile_name"], current_user_id="U1")
+    by_id = {b.get("block_id"): b for b in blocks}
+    assert by_id["rbac_role"]["element"]["initial_value"] == "integra-assist-admin"
+    assert "slack:U1" in by_id["rbac_users"]["element"]["initial_value"]
+    assert by_id["rbac_bootstrap_admins"]["element"]["initial_value"] == "slack:U1"
+    assert {o["value"] for o in by_id["rbac_toolsets"]["element"]["initial_options"]} == {"skill_view", "read_file"}
+    assert {o["value"] for o in by_id["rbac_skills"]["element"]["initial_options"]} == {"demo-skill"}
+    assert {o["value"] for o in by_id["rbac_deny"]["element"]["initial_options"]} == {"terminal"}
+
+
+def test_slack_principal_canonicalizes_team_prefixed_member_id():
+    assert principal("slack", "U1", "T1").id == "slack:U1"
+    assert principal("slack", "T1:U1").id == "slack:U1"
+    assert _normalize_share_target(principal("slack", "U0", "T1"), "slack:T1:U2") == "slack:U2"

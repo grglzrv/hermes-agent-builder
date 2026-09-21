@@ -13,6 +13,33 @@
  function modelValue(m){return typeof m==='string'?m:m.value}
  function modelLabel(m){return typeof m==='string'?m:(m.label||m.value)}
  function cloneEmpty(){return JSON.parse(JSON.stringify(emptyForm))}
+ function formFromAgent(a){
+  const acl=a.acl||[];
+  const nonOwner=acl.filter(x=>x.role!=='owner'&&x.principal_type==='user').map(x=>x.principal_id).filter(Boolean);
+  const owner=(acl.find(x=>x.role==='owner'&&x.principal_type==='user')||{}).principal_id||a.owner_id||'';
+  const policy=nonOwner.length?'shared':'private';
+  const f=Object.assign(cloneEmpty(),{purpose:a.purpose||'',description:a.description||'',model:a.model||'',access_policy:policy,risk_level:a.risk_level||'human-approval',private_user:owner,shared_users:nonOwner.join(', ')});
+  const r=a.rbac||{};
+  if(r.install){
+   f.rbac_install=true;
+   f.rbac_fail_closed=r.fail_closed!==false;
+   f.rbac_role=r.role||'viewer';
+   f.rbac_extends=(r.extends||[]).join(', ');
+   f.rbac_deny=(r.deny||[]).join(', ');
+   f.rbac_default_roles=(r.default_roles||[]).join(', ');
+   f.rbac_extra_roles=r.extra_roles||'';
+   f.rbac_users=(r.users||[]).join(', ');
+   f.rbac_bootstrap_admins=(r.bootstrap_admins||[]).join(', ');
+   f.rbac_toolsets=(r.toolsets&&r.toolsets.length)?r.toolsets:[];
+   f.rbac_skills=r.skills||[];
+   f.rbac_identity_persons=r.identity_persons||'';
+   f.rbac_user_roles=r.user_roles||'';
+   f.rbac_bypass_sensitive_paths=!!r.bypass_sensitive_paths;
+  } else {
+   f.rbac_install=false;
+  }
+  return f;
+ }
  function toPayload(form, editing){
   const p=Object.assign({},form,{shared_users:form.access_policy==='shared'?splitCSV(form.shared_users):[]});
   const privateUsers=form.access_policy==='private'?splitCSV(form.private_user):[];
@@ -55,7 +82,7 @@
   const attachSkill=e=>{const file=e.target.files&&e.target.files[0];if(!file)return;if(file.size>30000){setErr('Skill file must be 30 KB or smaller.');return;}file.text().then(text=>{set('custom_skill_text',text);if(!form.custom_skill_name)set('custom_skill_name',file.name.replace(/\.[^.]+$/,'').replace(/[^A-Za-z0-9_-]+/g,'-').toLowerCase())}).catch(x=>setErr(String(x)))};
   const decide=(id,action)=>{setErr('');setNotice('');setBusy(true);SDK.fetchJSON('/api/plugins/agent-builder/requests/'+encodeURIComponent(id)+'/'+action,{method:'POST'}).then(()=>{setNotice((action==='approve'?'Approved ':'Rejected ')+id);return load()}).catch(x=>setErr(String(x))).finally(()=>setBusy(false));};
   const openCreate=()=>{setEditing('');setForm(cloneEmpty());setModal(true)};
-  const openUpdate=()=>{const a=selectedAgent(); if(!a){setErr(selected.length?'Select exactly one agent to update.':'Select an agent first.');return;} setEditing(a.id);setForm(Object.assign(cloneEmpty(),{purpose:a.purpose||'',description:a.description||'',model:a.model||'',access_policy:a.access_policy||'private',risk_level:a.risk_level||'human-approval'}));setNotice('Updating selected agent '+a.profile_name+'. Blank text fields are left unchanged. Empty skills/MCP selections are ignored.');setModal(true)};
+  const openUpdate=()=>{const a=selectedAgent(); if(!a){setErr(selected.length?'Select exactly one agent to update.':'Select an agent first.');return;} setEditing(a.id);setForm(formFromAgent(a));setNotice('Updating selected agent '+a.profile_name+'. Current RBAC settings are loaded from the generated profile. Blank text fields are left unchanged. Empty skills/MCP selections are ignored.');setModal(true)};
   const deleteSelected=()=>{const agents=selectedAgents(); if(!agents.length){setErr('Select one or more agents first.');return;} const names=agents.map(a=>a.profile_name).join(', '); if(!confirm('Delete '+agents.length+' selected agent'+(agents.length===1?'':'s')+'?\n\n'+names+'\n\nGenerated profiles will be moved aside and removed from the registry list.'))return; setBusy(true);setErr('');Promise.all(agents.map(a=>SDK.fetchJSON('/api/plugins/agent-builder/agents/'+encodeURIComponent(a.id),{method:'DELETE'}))).then(()=>{setNotice('Deleted '+agents.length+' agent'+(agents.length===1?'':'s')+': '+names);setSelected([]);return load()}).catch(x=>setErr(String(x))).finally(()=>setBusy(false));};
   const submit=e=>{e.preventDefault();setBusy(true);setErr('');setNotice('');let payload;try{payload=toPayload(form,!!editing)}catch(x){setErr(String(x));setBusy(false);return;}
    const url='/api/plugins/agent-builder/agents'+(editing?'/'+encodeURIComponent(editing):'');
