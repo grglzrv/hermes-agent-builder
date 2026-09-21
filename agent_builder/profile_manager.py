@@ -65,7 +65,7 @@ class ProfileManager:
             if skills_root not in src.parents and src != skills_root: continue
             dst=dst_root/rel
             if src.exists() and src.is_dir(): dst.parent.mkdir(parents=True,exist_ok=True); shutil.copytree(src,dst,symlinks=False)
-    def update_profile(self, profile_name, *, provider=None, model=None, purpose=None, instructions=None, skills=None, mcp_servers=None, rbac=None, cron=None):
+    def update_profile(self, profile_name, *, provider=None, model=None, purpose=None, instructions=None, skills=None, mcp_servers=None, rbac=None, cron=None, custom_skills=None, custom_mcps=None):
         p=self.profile_path(profile_name)
         if not p.exists(): raise ValidationError('profile does not exist')
         cfg_path=p/'config.yaml'
@@ -79,6 +79,12 @@ class ProfileManager:
             elif 'provider' in model_cfg and not provider: model_cfg.pop('provider',None)
         if mcp_servers is not None:
             cfg['mcp_servers']=copy_catalog_mcp(self.home, mcp_servers) if mcp_servers else {}
+        if custom_mcps:
+            mcp_cfg=cfg.setdefault('mcp_servers',{})
+            if not isinstance(mcp_cfg,dict):
+                mcp_cfg={}; cfg['mcp_servers']=mcp_cfg
+            for item in custom_mcps:
+                mcp_cfg[item['name']]={'transport':item['transport'],'url':item['url']}
         if cron is not None:
             cfg['cron']=cron if isinstance(cron,dict) else {'jobs': cron}
         cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
@@ -95,6 +101,14 @@ class ProfileManager:
                 if child.is_dir(): shutil.rmtree(child)
                 else: child.unlink()
             self._sync_skills(dst_root, skills)
+        if custom_skills:
+            dst_root=p/'skills'; dst_root.mkdir(mode=0o700,exist_ok=True)
+            for item in custom_skills:
+                dst=dst_root/item['name']; dst.mkdir(mode=0o700,exist_ok=True)
+                content=item['content'].strip()
+                if not content.startswith('---'):
+                    content=f"---\nname: {item['name']}\ndescription: Custom skill supplied by the agent owner.\n---\n\n# {item['name']}\n\n{content}\n"
+                (dst/'SKILL.md').write_text(content)
         if rbac:
             install_rbac(p, rbac)
         self._reject_symlinks(p)

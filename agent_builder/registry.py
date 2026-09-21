@@ -113,6 +113,10 @@ class Registry:
             if all_agents: rows=c.execute("SELECT * FROM agents WHERE status!='deleted' ORDER BY created_at").fetchall()
             else: rows=c.execute("SELECT DISTINCT a.* FROM agents a JOIN agent_acl x ON x.agent_id=a.id WHERE x.principal_id=? AND x.revoked_at IS NULL AND a.status!='deleted' ORDER BY a.created_at",(pid,)).fetchall()
             return [dict(x) for x in rows]
+    def list_accessible_agents(self,pid):
+        with self.connect() as c:
+            rows=c.execute("SELECT DISTINCT a.* FROM agents a JOIN agent_acl x ON x.agent_id=a.id WHERE x.principal_id=? AND x.revoked_at IS NULL AND a.status!='deleted' ORDER BY a.created_at",(pid,)).fetchall()
+            return [dict(x) for x in rows]
     def acl(self,aid):
         with self.connect() as c:return [dict(x) for x in c.execute('SELECT principal_type,principal_id,role,created_at,created_by FROM agent_acl WHERE agent_id=? AND revoked_at IS NULL',(aid,))]
     def share(self,aid,pid,role,actor):

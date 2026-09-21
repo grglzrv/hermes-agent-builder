@@ -185,6 +185,55 @@ def identities_yaml(spec: dict) -> dict:
     return {"persons": dict(spec.get("identity_persons") or {})}
 
 
+def _read_yaml_mapping(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except yaml.YAMLError as exc:
+        raise ValidationError(f"invalid existing RBAC YAML: {path.name}") from exc
+    if not isinstance(data, dict):
+        raise ValidationError(f"existing RBAC YAML must be a mapping: {path.name}")
+    return data
+
+
+def _merge_unique(left, right):
+    out = []
+    for value in list(left or []) + list(right or []):
+        if value not in out:
+            out.append(value)
+    return out
+
+
+def _merge_roles_yaml(existing: dict, generated: dict) -> dict:
+    merged = dict(existing or {})
+    merged["fail_closed"] = bool(generated.get("fail_closed", existing.get("fail_closed", True)))
+    merged["bootstrap_admins"] = _merge_unique(existing.get("bootstrap_admins", []), generated.get("bootstrap_admins", []))
+    roles = dict(existing.get("roles") or {})
+    roles.update(generated.get("roles") or {})
+    merged["roles"] = roles
+    users = dict(existing.get("users") or {})
+    users.update(generated.get("users") or {})
+    merged["users"] = users
+    return merged
+
+
+def _merge_identities_yaml(existing: dict, generated: dict) -> dict:
+    persons = dict((existing or {}).get("persons") or {})
+    persons.update((generated or {}).get("persons") or {})
+    return {"persons": persons}
+
+
+def _patch_copied_rbac_plugin(dest: Path):
+    init = dest / "__init__.py"
+    if not init.exists():
+        return
+    text = init.read_text()
+    patched = text.replace("_resolver = RoleResolver()", "_resolver = RoleResolver(_default_config_path())")
+    if patched != text:
+        init.write_text(patched)
+
+
 def _copy_or_clone_plugin(source: str, dest: Path):
     if dest.exists():
         shutil.rmtree(dest)
@@ -218,8 +267,13 @@ def install_rbac(profile_home: Path, spec: dict) -> dict:
     plugins_dir = profile_home / "plugins"
     plugins_dir.mkdir(parents=True, exist_ok=True)
     dest = plugins_dir / RBAC_PLUGIN
+    existing_roles = _read_yaml_mapping(dest / "roles.yaml")
+    existing_identities = _read_yaml_mapping(dest / "identities.yaml")
     _copy_or_clone_plugin(spec.get("source") or RBAC_REPO, dest)
-    (dest / "roles.yaml").write_text(yaml.safe_dump(roles_yaml(spec), sort_keys=False, allow_unicode=True))
-    (dest / "identities.yaml").write_text(yaml.safe_dump(identities_yaml(spec), sort_keys=False, allow_unicode=True))
+    _patch_copied_rbac_plugin(dest)
+    role_doc = _merge_roles_yaml(existing_roles, roles_yaml(spec))
+    identity_doc = _merge_identities_yaml(existing_identities, identities_yaml(spec))
+    (dest / "roles.yaml").write_text(yaml.safe_dump(role_doc, sort_keys=False, allow_unicode=True))
+    (dest / "identities.yaml").write_text(yaml.safe_dump(identity_doc, sort_keys=False, allow_unicode=True))
     _enable_plugin(profile_home)
     return {"plugin_dir": str(dest), "roles_path": str(dest / "roles.yaml")}

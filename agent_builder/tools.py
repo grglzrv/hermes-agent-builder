@@ -8,7 +8,7 @@ def register_tools(ctx, service):
     def actor(args): return principal(args.get('platform','telegram'), args.get('user_id','unknown'), args.get('scope',''))
     schemas=[('agent_builder_list','List authorized SSA agents'),('agent_builder_get','Get one authorized SSA agent'),('agent_builder_catalogs','List allowed models skills and MCPs')]
     for name,desc in schemas:
-        ctx.register_tool(name=name,toolset='agent_builder',description=desc,schema={'name':name,'description':desc,'parameters':{'type':'object','properties':{}}},handler=lambda args,n=name,**kw: _dispatch(n,args,service,actor))
+        ctx.register_tool(name=name,toolset='agent-builder',description=desc,schema={'name':name,'description':desc,'parameters':{'type':'object','properties':{}}},handler=lambda args,n=name,**kw: _dispatch(n,args,service,actor))
 
 def _dispatch(name,args,service,actor):
     try:

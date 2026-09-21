@@ -29,6 +29,33 @@ def _service(ctx):
     return AgentService(reg, home, allowed_models=allowed, require_creation_approval=require)
 
 
+def _agent_builder_slash_command(raw_args: str = '') -> str:
+    """Gateway slash fallback for mention text like '@hermes-agent /agent-builder'.
+
+    Slack app_mention events may be consumed by Hermes' normal slash-command
+    path before plugin-native Slack event handlers can respond. Registering this
+    command prevents the core "Unknown command" response while keeping the
+    standalone plugin boundary intact.
+    """
+    try:
+        from integrations.slack import _create_fallback_text, _usage
+    except Exception:
+        _create_fallback_text = None
+        _usage = None
+    args = (raw_args or '').strip()
+    if not args or args.split(maxsplit=1)[0].lower() in {'create', 'new', 'wizard'}:
+        if _create_fallback_text:
+            return _create_fallback_text()
+        return 'Open Hermes Dashboard → Plugins → Agent Builder to create an agent.'
+    if args.split(maxsplit=1)[0].lower() in {'help', 'commands'} and _usage:
+        return _usage()
+    return (
+        'Agent Builder mention command is installed. For now, use the Dashboard '
+        'Agent Builder tab for list/update/delete, or create inline with:\n'
+        '`@hermes-agent /agent-builder create name="Ops helper" model=provider:model purpose="Answer scoped operational questions"`'
+    )
+
+
 def register(ctx):
     service = _service(ctx)
     register_tools(ctx, service)

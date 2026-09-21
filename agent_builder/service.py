@@ -27,9 +27,9 @@ def normalize_share_users(values):
     return list(dict.fromkeys(out))
 
 AUTONOMY_CHOICES=[
-    {'value':'human-approval','label':'Human approval','description':'Prepare and recommend actions, but require explicit human approval before irreversible or external side effects.'},
-    {'value':'agent','label':'Agent supervised','description':'Let the agent execute routine scoped actions inside RBAC/tool limits, escalating risky or ambiguous steps to a human.'},
-    {'value':'autonomous','label':'Autonomous','description':'Let the agent plan and execute approved workflows end-to-end inside RBAC/tool limits; use only for trusted, well-scoped agents.'},
+    {'value':'human-approval','label':'Human approval - manual','description':'Manual approval for actions.'},
+    {'value':'agent','label':'Agent supervised - smart','description':'Smart approval for scoped actions.'},
+    {'value':'autonomous','label':'Autonomous - no approval','description':'No approval required inside configured limits.'},
 ]
 
 def normalize_autonomy(value):
@@ -160,6 +160,24 @@ class AgentService:
         if 'mcp_servers' in spec:
             mcps=selections(spec.get('mcp_servers') or [], valid_mcps, 'MCP server'); profile_updates['mcp_servers']=mcps
         if 'cron' in spec: profile_updates['cron']=spec.get('cron') or {}
+        if 'custom_skills' in spec:
+            custom_skills=[]
+            for item in list(spec.get('custom_skills') or [])[:8]:
+                if not isinstance(item,dict): raise ValidationError('custom skill must be an object')
+                custom_skills.append({'name':slug(item.get('name') or ''),'content':text(item.get('content',''),30000)})
+            if custom_skills: profile_updates['custom_skills']=custom_skills
+        if 'custom_mcps' in spec:
+            custom_mcps=[]
+            for item in list(spec.get('custom_mcps') or [])[:8]:
+                if not isinstance(item,dict): raise ValidationError('custom MCP must be an object')
+                name=slug(item.get('name') or '')
+                url=text(item.get('url',''),2000); parsed=urlsplit(url)
+                if parsed.scheme not in {'http','https'} or not parsed.netloc or parsed.username or parsed.password:
+                    raise ValidationError('custom MCP URL must be an http(s) URL without embedded credentials')
+                transport=str(item.get('transport') or 'http').lower()
+                if transport not in {'http','sse'}: raise ValidationError('custom MCP transport must be http or sse')
+                custom_mcps.append({'name':name,'url':url,'transport':transport})
+            if custom_mcps: profile_updates['custom_mcps']=custom_mcps
         if 'rbac' in spec:
             profile_updates['rbac']=normalize_rbac_spec(spec.get('rbac'), selected_skills=skills if skills is not None else [])
             if profile_updates['rbac'] is None: profile_updates.pop('rbac')
@@ -170,7 +188,9 @@ class AgentService:
         self.registry.audit(actor,'agent.update','allow',ag['id'],metadata={'fields':sorted(spec.keys())})
         return self.get_agent(actor,ag['id'])
     def share_agent(self, actor, key, principal_id, role='user'):
-        ag=self.registry.get_agent(key); authorize(self.registry,actor,'agent.share',ag['id']); self.registry.share(ag['id'],principal_id,role,actor.id); self.registry.audit(actor,'agent.share','allow',ag['id'],metadata={'principal_id':principal_id,'role':role})
+        ag=self.registry.get_agent(key)
+        if not ag: raise NotFoundError('agent not found')
+        authorize(self.registry,actor,'agent.share',ag['id']); self.registry.share(ag['id'],principal_id,role,actor.id); self.registry.audit(actor,'agent.share','allow',ag['id'],metadata={'principal_id':principal_id,'role':role})
     def disable_agent(self, actor, key):
         ag=self.registry.get_agent(key); authorize(self.registry,actor,'agent.delete',ag['id']); self.pm.disable_profile(ag['profile_name']); self.registry.update_status(ag['id'],'disabled'); self.registry.audit(actor,'agent.disable','allow',ag['id'])
     def delete_agent(self, actor, key):
