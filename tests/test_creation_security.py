@@ -13,7 +13,7 @@ def svc(tmp_path):
 
 def test_profile_name_and_files(tmp_path):
     s,a,h=svc(tmp_path); ag=s.create_agent(a,{'display_name':'PROD2 Investigator','model':'m','mcp_servers':['grafana-prod']})
-    assert ag['profile_name'].startswith('ssa-prod2-investigator-')
+    assert ag['profile_name'] == 'ssa-prod2-investigator'
     p=h/'profiles'/ag['profile_name']; assert (p/'config.yaml').exists(); assert (p/'SOUL.md').exists()
 
 def test_invalid_model_and_mcp(tmp_path):

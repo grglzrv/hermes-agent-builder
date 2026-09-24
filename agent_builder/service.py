@@ -75,7 +75,7 @@ class AgentService:
         spec=dict(spec); spec['custom_skills']=custom_skills; spec['custom_mcps']=custom_mcps
         rbac=normalize_rbac_spec(spec.get('rbac'), selected_skills=skills)
         risk=normalize_autonomy(spec.get('risk_level') or spec.get('autonomy_level'))
-        aid='agt_'+uuid.uuid4().hex[:20]; prof=f"ssa-{slug(name)}-{uuid.uuid4().hex[:6]}"
+        aid='agt_'+uuid.uuid4().hex[:20]; prof=f"ssa-{slug(name)}"
         row={'id':aid,'profile_name':prof,'display_name':name,'description':text(spec.get('description',''),1000),'purpose':text(spec.get('purpose',''),2000),'owner_id':actor.id,'owner_platform':actor.platform,'model':model_value,'status':'creating','risk_level':risk,'access_policy':spec.get('access_policy') or 'private','approval_required': bool(spec.get('approval_required')),'created_by':actor.id}
         need_approval=self.require_creation_approval or row['approval_required']
         if need_approval:
