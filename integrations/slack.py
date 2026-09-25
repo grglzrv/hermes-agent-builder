@@ -138,6 +138,10 @@ def _parse_key_values(tokens: list[str]) -> dict[str, Any]:
         'autonomy': 'risk_level',
         'autonomy_level': 'risk_level',
         'access': 'access_policy',
+        'instruction': 'instructions',
+        'system_prompt': 'instructions',
+        'systemprompt': 'instructions',
+        'prompt': 'instructions',
         'mcp': 'mcp_servers',
         'mcps': 'mcp_servers',
     }

@@ -3,6 +3,7 @@ import asyncio
 from agent_builder.auth import principal
 from agent_builder.registry import Registry
 from agent_builder.service import AgentService
+from agent_builder.errors import ApprovalRequired
 from integrations.slack import _agent_builder_command, _agent_builder_mention, _agent_command, _handle_update_agent_selected, _mention_to_command, _modal_blocks, _normalize_share_target, _open_update_modal, _parse_key_values
 
 
@@ -584,3 +585,52 @@ def test_slack_principal_canonicalizes_team_prefixed_member_id():
     assert principal("slack", "U1", "T1").id == "slack:U1"
     assert principal("slack", "T1:U1").id == "slack:U1"
     assert _normalize_share_target(principal("slack", "U0", "T1"), "slack:T1:U2") == "slack:U2"
+
+
+
+def test_slack_inline_instruction_aliases_are_preserved_after_approval(tmp_path):
+    h = tmp_path / "h"
+    (h / "profiles").mkdir(parents=True)
+    (h / "skills").mkdir(parents=True)
+    (h / "config.yaml").write_text("")
+    service = AgentService(Registry(tmp_path / "db-approval.sqlite"), h, allowed_models=["m"], require_creation_approval=True)
+    admin = principal("slack", "ADMIN", "T1")
+    user = principal("slack", "U1", "T1")
+    service.bootstrap_admin(admin)
+    service.registry.upsert_principal(user)
+    service.registry.grant_global(user.id, "agent-builder-user", admin.id)
+    spec = _parse_key_values(['name=Prompted', 'model=m', 'purpose=p', 'instruction=obey this prompt'])
+    assert spec["instructions"] == "obey this prompt"
+    try:
+        service.create_agent(user, spec)
+    except ApprovalRequired as pending:
+        request_id = str(pending)
+    else:
+        raise AssertionError("expected approval")
+    service.approve_request(admin, request_id)
+    agents_md = (h / "profiles" / "ssa-prompted" / "AGENTS.md").read_text()
+    assert "obey this prompt" in agents_md
+
+
+def test_pending_approval_update_changes_instructions_before_approval(tmp_path):
+    h = tmp_path / "h"
+    (h / "profiles").mkdir(parents=True)
+    (h / "skills").mkdir(parents=True)
+    (h / "config.yaml").write_text("")
+    service = AgentService(Registry(tmp_path / "db-update-approval.sqlite"), h, allowed_models=["m"], require_creation_approval=True)
+    admin = principal("slack", "ADMIN", "T1")
+    user = principal("slack", "U1", "T1")
+    service.bootstrap_admin(admin)
+    service.registry.upsert_principal(user)
+    service.registry.grant_global(user.id, "agent-builder-user", admin.id)
+    try:
+        service.create_agent(user, {"display_name": "Needs Update", "model": "m", "purpose": "old", "instructions": "old instructions"})
+    except ApprovalRequired as pending:
+        request_id = str(pending)
+    else:
+        raise AssertionError("expected approval")
+    service.update_pending_request(admin, request_id, {"purpose": "new", "instructions": "new instructions"})
+    service.approve_request(admin, request_id)
+    profile = h / "profiles" / "ssa-needs-update"
+    assert "Purpose: new" in (profile / "SOUL.md").read_text()
+    assert "new instructions" in (profile / "AGENTS.md").read_text()

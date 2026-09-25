@@ -8,3 +8,5 @@
 .agent-builder select,.agent-builder input,.agent-builder textarea{max-width:100%;box-sizing:border-box}
 .agent-builder .ab-modal-actions{position:sticky;bottom:0;background:var(--background,#11151c);padding-top:10px;border-top:1px solid var(--border,#333)}
 @media(max-width:900px){.agent-builder .ab-two-col{grid-template-columns:1fr}.agent-builder .ab-modal{width:96vw;max-height:84vh}.agent-builder .ab-form{gap:8px;padding:10px}}
+
+.ab-review-body{display:grid;gap:12px;padding:18px}.ab-review-grid{display:grid;grid-template-columns:160px 1fr;gap:8px 14px;margin:0}.ab-review-grid dt{font-weight:700;color:var(--muted,#aaa)}.ab-review-grid dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}.ab-review-json{max-height:260px;overflow:auto;padding:12px;border:1px solid var(--border,#333);border-radius:6px;background:#0b1020}.ab-row-actions{display:flex;gap:8px;flex-wrap:wrap}@media(max-width:700px){.ab-review-grid{grid-template-columns:1fr}.ab-review-grid dt{margin-top:8px}}

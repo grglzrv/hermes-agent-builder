@@ -148,6 +148,14 @@ class Registry:
             return dict(c.execute('SELECT * FROM approval_requests WHERE id=?',(rid,)).fetchone())
     def pending(self):
         with self.connect() as c:return [dict(x) for x in c.execute("SELECT * FROM approval_requests WHERE status='pending' AND expires_at>? ORDER BY requested_at",(int(time.time()),))]
+    def get_request(self,rid):
+        with self.connect() as c:
+            r=c.execute('SELECT * FROM approval_requests WHERE id=?',(rid,)).fetchone(); return dict(r) if r else None
+    def update_request_payload(self,rid,payload,actor):
+        with self.tx() as c:
+            c.execute("UPDATE approval_requests SET payload=? WHERE id=? AND status='pending' AND expires_at>?",(json.dumps(payload,separators=(',',':')),rid,int(time.time())))
+            if c.total_changes!=1: raise ConflictError('approval is unavailable')
+            return dict(c.execute('SELECT * FROM approval_requests WHERE id=?',(rid,)).fetchone())
     def audit(self,actor,action,decision,agent_id=None,resource=None,metadata=None,request_id=None):
         with self.tx() as c:c.execute('INSERT INTO audit_events VALUES(?,?,?,?,?,?,?,?,?,?)',('evt_'+uuid.uuid4().hex,int(time.time()),request_id,actor.id if actor else None,actor.platform if actor else None,agent_id,action,resource,decision,json.dumps(metadata or {},separators=(',',':'))))
     def audit_list(self,limit=200):

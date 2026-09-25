@@ -142,6 +142,16 @@ def requests(request:Request):
     except Exception as e: raise HTTPException(403,str(e))
 
 
+@router.patch('/requests/{request_id}')
+def update_request(request_id:str, payload:dict, request:Request):
+    try:
+        s,a=context(request)
+        req=s.update_pending_request(a,request_id,payload)
+        agent=s.registry.get_agent(req.get('agent_id'),include_deleted=True) if req.get('agent_id') else None
+        return {'ok':True,'request':_json_row(req),'agent':_json_row(agent) if agent else None}
+    except Exception as e: raise HTTPException(400,str(e))
+
+
 @router.post('/requests/{request_id}/approve')
 def approve_request(request_id:str, request:Request):
     try:

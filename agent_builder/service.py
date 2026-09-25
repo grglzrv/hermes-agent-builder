@@ -121,6 +121,64 @@ class AgentService:
     def deny_request(self, actor, request_id):
         if not self.registry.is_admin(actor.id): raise AuthorizationError('access denied')
         req=self.registry.decide(request_id,'denied',actor.id); self.registry.audit(actor,'approval.deny','allow',req.get('agent_id'),metadata={'request_id':request_id}); return req
+    def update_pending_request(self, actor, request_id, spec_updates):
+        self.registry.upsert_principal(actor)
+        if not self.registry.is_admin(actor.id): raise AuthorizationError('access denied')
+        req=self.registry.get_request(request_id)
+        if not req or req.get('status')!='pending': raise NotFoundError('approval is unavailable')
+        if req.get('request_type')!='agent.create': raise ValidationError('unsupported approval request type')
+        payload=json.loads(req.get('payload') or '{}')
+        spec=dict(payload.get('spec') or {})
+        incoming=dict(spec_updates or {})
+        for key in ('display_name','profile_name'):
+            incoming.pop(key,None)
+        if 'model' in incoming:
+            _provider,_model,value=parse_model_choice(incoming.get('model') or '', self.catalogs()['models'])
+            if self.allowed_models and value not in self.allowed_models and _model not in self.allowed_models: raise ValidationError('unsupported model')
+            incoming['model']=value
+        if 'purpose' in incoming: incoming['purpose']=text(incoming.get('purpose',''),2000)
+        if 'description' in incoming: incoming['description']=text(incoming.get('description',''),1000)
+        if 'instructions' in incoming: incoming['instructions']=text(incoming.get('instructions',''),4000)
+        if 'risk_level' in incoming or 'autonomy_level' in incoming:
+            incoming['risk_level']=normalize_autonomy(incoming.get('risk_level') if 'risk_level' in incoming else incoming.get('autonomy_level'))
+            incoming.pop('autonomy_level',None)
+        if 'access_policy' in incoming and incoming.get('access_policy') not in {'private','shared'}: raise ValidationError('invalid access policy')
+        valid_skills=list_skills(self.pm.home); valid_mcps=list_mcps(self.pm.home)
+        skills=None; mcps=None
+        if 'skills' in incoming:
+            skills=selections(incoming.get('skills') or [], valid_skills, 'skill'); incoming['skills']=skills
+        if 'mcp_servers' in incoming:
+            mcps=selections(incoming.get('mcp_servers') or [], valid_mcps, 'MCP server'); incoming['mcp_servers']=mcps
+        if 'custom_skills' in incoming:
+            clean=[]
+            for item in list(incoming.get('custom_skills') or [])[:8]:
+                if not isinstance(item,dict): raise ValidationError('custom skill must be an object')
+                clean.append({'name':slug(item.get('name') or ''),'content':text(item.get('content',''),30000)})
+            incoming['custom_skills']=clean
+        if 'custom_mcps' in incoming:
+            clean=[]
+            for item in list(incoming.get('custom_mcps') or [])[:8]:
+                if not isinstance(item,dict): raise ValidationError('custom MCP must be an object')
+                name=slug(item.get('name') or '')
+                url=text(item.get('url',''),2000); parsed=urlsplit(url)
+                if parsed.scheme not in {'http','https'} or not parsed.netloc or parsed.username or parsed.password:
+                    raise ValidationError('custom MCP URL must be an http(s) URL without embedded credentials')
+                transport=str(item.get('transport') or 'http').lower()
+                if transport not in {'http','sse'}: raise ValidationError('custom MCP transport must be http or sse')
+                clean.append({'name':name,'url':url,'transport':transport})
+            incoming['custom_mcps']=clean
+        if 'rbac' in incoming:
+            normalize_rbac_spec(incoming.get('rbac'), selected_skills=skills if skills is not None else spec.get('skills') or [])
+        spec.update(incoming)
+        payload['spec']=spec
+        fields={}
+        for key in ('description','purpose','model','risk_level','access_policy'):
+            if key in incoming: fields[key]=incoming[key]
+        if fields or skills is not None or mcps is not None:
+            self.registry.update_agent(req['agent_id'], fields, skills=skills, integrations=mcps)
+        updated=self.registry.update_request_payload(request_id,payload,actor.id)
+        self.registry.audit(actor,'approval.update','allow',req.get('agent_id'),metadata={'request_id':request_id,'fields':sorted(incoming.keys())})
+        return updated
     def pending_requests(self, actor):
         self.registry.upsert_principal(actor)
         if not self.registry.is_admin(actor.id): raise AuthorizationError('access denied')
