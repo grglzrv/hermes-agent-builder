@@ -1246,7 +1246,7 @@ async def _agent_builder_command(ack, respond, command, service, client=None):
             return
         cmd = tokens[0].lower()
         if cmd in {'list', 'agents'}:
-            await respond(_fmt_list(service.list_agents(actor)), response_type='ephemeral')
+            await respond(_fmt_list(_accessible_update_agents(service, actor)), response_type='ephemeral')
             return
         if cmd == 'catalog':
             await respond(_catalog_text(service), response_type='ephemeral')
@@ -1320,7 +1320,7 @@ async def _agent_command(ack, respond, command, service, adapter):
             await respond(_agent_usage(), response_type='ephemeral')
             return
         if tokens[0] == 'list':
-            await respond(_fmt_list(service.list_agents(actor)), response_type='ephemeral')
+            await respond(_fmt_list(_accessible_update_agents(service, actor)), response_type='ephemeral')
             return
         if tokens[0] == 'chat':
             if len(tokens) < 2:
@@ -1367,7 +1367,7 @@ async def _agent_builder_mention(event, say, service, adapter):
         tokens = _split_text(command.get('text') or '')
         # Keep mention-mode /agent routed through the same helper where possible.
         if not tokens or tokens[0] == 'list':
-            await respond(_fmt_list(service.list_agents(actor)))
+            await respond(_fmt_list(_accessible_update_agents(service, actor)))
         elif tokens[0] == 'chat':
             if len(tokens) < 2:
                 await respond('Usage: `/agent chat <ssa-profile> [message]`')

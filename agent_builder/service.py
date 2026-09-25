@@ -3,7 +3,7 @@ import json
 import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
-from .auth import authorize, principal
+from .auth import ROLE_ACTIONS, authorize, principal
 from .catalog import list_mcps, list_models, list_rbac_toolsets, list_skills, parse_model_choice
 from .errors import ApprovalRequired, AuthorizationError, NotFoundError, ValidationError
 from .profile_manager import ProfileManager
@@ -113,6 +113,10 @@ class AgentService:
                                        custom_mcps=spec.get('custom_mcps') or (),
                                        rbac=rbac)
                 self.registry.update_status(ag['id'],'active')
+                shared=normalize_share_users(spec.get('shared_users'))
+                if shared is not None:
+                    for pid in shared:
+                        self.registry.share(ag['id'],pid,'user',actor.id)
             except BaseException:
                 self.registry.update_status(ag['id'],'error')
                 raise
@@ -273,11 +277,19 @@ class AgentService:
         ag=self.registry.get_agent(key); authorize(self.registry,actor,'agent.delete',ag['id']); self.pm.disable_profile(ag['profile_name']); self.registry.update_status(ag['id'],'disabled'); self.registry.audit(actor,'agent.disable','allow',ag['id'])
     def delete_agent(self, actor, key):
         ag=self.registry.get_agent(key); authorize(self.registry,actor,'agent.delete',ag['id']); self.pm.delete_profile(ag['profile_name']); self.registry.update_status(ag['id'],'deleted'); self.registry.audit(actor,'agent.delete','allow',ag['id'])
+    def _authorize_acl_invoke(self, actor, agent_id):
+        row=self.registry.get_agent(agent_id, include_deleted=True)
+        if not row or row.get('status')!='active': raise AuthorizationError('agent unavailable')
+        role=self.registry.get_role(agent_id,actor.id)
+        if 'agent.invoke' not in ROLE_ACTIONS.get(role,set()): raise AuthorizationError('access denied')
+        return True
     def bind(self, actor, conversation, key, thread=''):
-        ag=self.registry.get_agent(key); authorize(self.registry,actor,'agent.invoke',ag['id']); self.registry.bind(actor,conversation,ag['id'],thread); self.registry.audit(actor,'agent.bind','allow',ag['id']); return ag
+        ag=self.registry.get_agent(key)
+        if not ag: raise NotFoundError('agent not found')
+        self._authorize_acl_invoke(actor,ag['id']); self.registry.bind(actor,conversation,ag['id'],thread); self.registry.audit(actor,'agent.bind','allow',ag['id']); return ag
     def unbind(self, actor, conversation, thread=''):
         self.registry.unbind(actor,conversation,thread); self.registry.audit(actor,'agent.unbind','allow')
     def route(self, actor, conversation, message, thread=''):
         aid=self.registry.binding(actor,conversation,thread)
         if not aid: raise NotFoundError('no agent selected')
-        ag=self.registry.get_agent(aid); authorize(self.registry,actor,'agent.invoke',aid); self.registry.audit(actor,'agent.invoke','allow',aid); return ag['profile_name']
+        ag=self.registry.get_agent(aid); self._authorize_acl_invoke(actor,aid); self.registry.audit(actor,'agent.invoke','allow',aid); return ag['profile_name']

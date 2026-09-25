@@ -634,3 +634,38 @@ def test_pending_approval_update_changes_instructions_before_approval(tmp_path):
     profile = h / "profiles" / "ssa-needs-update"
     assert "Purpose: new" in (profile / "SOUL.md").read_text()
     assert "new instructions" in (profile / "AGENTS.md").read_text()
+
+
+def test_agent_list_shows_only_owned_or_shared_even_for_admin(tmp_path):
+    service = make_service(tmp_path)
+    owner = principal("slack", "U1", "T1")
+    other = principal("slack", "U2", "T1")
+    service.registry.upsert_principal(other)
+    service.registry.grant_global(other.id, "agent-builder-user", owner.id)
+    mine = service.create_agent(owner, {"display_name": "Mine Only", "model": "m"})
+    theirs = service.create_agent(other, {"display_name": "Theirs Hidden", "model": "m"})
+    rec = Recorder()
+    asyncio.run(_agent_command(rec.ack, rec.respond, command('list', user='U1'), service, adapter=None))
+    text = rec.responses[-1][0]
+    assert mine["profile_name"] in text
+    assert theirs["profile_name"] not in text
+    service.share_agent(other, theirs["id"], owner.id, "user")
+    rec2 = Recorder()
+    asyncio.run(_agent_command(rec2.ack, rec2.respond, command('list', user='U1'), service, adapter=None))
+    assert theirs["profile_name"] in rec2.responses[-1][0]
+
+
+def test_agent_chat_denies_unshared_agent_even_for_admin(tmp_path):
+    service = make_service(tmp_path)
+    admin = principal("slack", "U1", "T1")
+    other = principal("slack", "U2", "T1")
+    service.registry.upsert_principal(other)
+    service.registry.grant_global(other.id, "agent-builder-user", admin.id)
+    theirs = service.create_agent(other, {"display_name": "No Chat", "model": "m"})
+    rec = Recorder()
+    asyncio.run(_agent_command(rec.ack, rec.respond, command(f'chat {theirs["profile_name"]} hello', user='U1'), service, adapter=None))
+    assert 'access denied' in rec.responses[-1][0]
+    service.share_agent(other, theirs["id"], admin.id, "user")
+    rec2 = Recorder()
+    asyncio.run(_agent_command(rec2.ack, rec2.respond, command(f'chat {theirs["profile_name"]} hello', user='U1'), service, adapter=None))
+    assert 'Selected' in rec2.responses[-1][0] or 'Opened thread' in rec2.responses[-1][0]
