@@ -136,3 +136,22 @@ def test_denied_pending_approval_deletes_registry_agent_and_releases_name(tmp_pa
     rows = [x for x in svc.registry.list_agents(owner.id, all_agents=True) if x["profile_name"] == "ssa-review-reject" and x["status"] != "deleted"]
     assert len(rows) == 1
     assert rows[0]["id"] != aid
+
+def test_active_agent_keeps_exact_profile_name_reserved_until_delete(tmp_path):
+    h, ag = seed(tmp_path)
+    svc = AgentService(Registry(h / "plugin-data" / "agent-builder" / "registry.db"), h, allowed_models=["m"])
+    owner = principal("telegram", "1")
+    from agent_builder.errors import ConflictError
+    try:
+        svc.create_agent(owner, {"display_name": "CLI Agent", "model": "m"})
+    except ConflictError as exc:
+        assert "already exists" in str(exc) or "UNIQUE" in str(exc)
+    else:
+        raise AssertionError("active duplicate profile name should be blocked")
+    assert svc.registry.get_agent(ag["profile_name"])["id"] == ag["id"]
+
+    svc.delete_agent(owner, ag["id"])
+    recreated = svc.create_agent(owner, {"display_name": "CLI Agent", "model": "m"})
+    assert recreated["profile_name"] == ag["profile_name"]
+    assert recreated["id"] != ag["id"]
+
