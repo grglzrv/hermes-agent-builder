@@ -124,7 +124,13 @@ class AgentService:
         return req
     def deny_request(self, actor, request_id):
         if not self.registry.is_admin(actor.id): raise AuthorizationError('access denied')
-        req=self.registry.decide(request_id,'denied',actor.id); self.registry.audit(actor,'approval.deny','allow',req.get('agent_id'),metadata={'request_id':request_id}); return req
+        req=self.registry.decide(request_id,'denied',actor.id)
+        if req.get('request_type')=='agent.create' and req.get('agent_id'):
+            ag=self.registry.get_agent(req['agent_id'],include_deleted=True)
+            if ag:
+                self.pm.delete_profile(ag['profile_name'])
+                self.registry.update_status(ag['id'],'deleted')
+        self.registry.audit(actor,'approval.deny','allow',req.get('agent_id'),metadata={'request_id':request_id}); return req
     def update_pending_request(self, actor, request_id, spec_updates):
         self.registry.upsert_principal(actor)
         if not self.registry.is_admin(actor.id): raise AuthorizationError('access denied')

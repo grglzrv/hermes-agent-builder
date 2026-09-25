@@ -8,7 +8,7 @@ SCHEMA = """
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS principals(id TEXT PRIMARY KEY, platform TEXT NOT NULL, user_id TEXT NOT NULL, scope TEXT NOT NULL DEFAULT '', display_name TEXT, created_at INTEGER NOT NULL, UNIQUE(platform,user_id,scope));
 CREATE TABLE IF NOT EXISTS global_roles(principal_id TEXT NOT NULL REFERENCES principals(id), role TEXT NOT NULL CHECK(role IN ('agent-builder-user','agent-builder-owner','hermes-admin')), created_at INTEGER NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY(principal_id,role));
-CREATE TABLE IF NOT EXISTS agents(id TEXT PRIMARY KEY, profile_name TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', purpose TEXT NOT NULL DEFAULT '', owner_id TEXT NOT NULL REFERENCES principals(id), owner_platform TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('creating','pending_approval','active','disabled','error','deleting','deleted')), risk_level TEXT NOT NULL CHECK(risk_level IN ('human-approval','agent','autonomous','read-only','low','medium','high')), access_policy TEXT NOT NULL CHECK(access_policy IN ('private','shared')), approval_required INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, created_by TEXT NOT NULL, deleted_at INTEGER);
+CREATE TABLE IF NOT EXISTS agents(id TEXT PRIMARY KEY, profile_name TEXT NOT NULL, display_name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', purpose TEXT NOT NULL DEFAULT '', owner_id TEXT NOT NULL REFERENCES principals(id), owner_platform TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('creating','pending_approval','active','disabled','error','deleting','deleted')), risk_level TEXT NOT NULL CHECK(risk_level IN ('human-approval','agent','autonomous','read-only','low','medium','high')), access_policy TEXT NOT NULL CHECK(access_policy IN ('private','shared')), approval_required INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, created_by TEXT NOT NULL, deleted_at INTEGER);
 CREATE TABLE IF NOT EXISTS agent_acl(agent_id TEXT NOT NULL REFERENCES agents(id), principal_type TEXT NOT NULL CHECK(principal_type IN ('user','group')), principal_id TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('owner','editor','user','auditor')), created_at INTEGER NOT NULL, created_by TEXT NOT NULL, revoked_at INTEGER, PRIMARY KEY(agent_id,principal_type,principal_id));
 CREATE TABLE IF NOT EXISTS agent_capabilities(agent_id TEXT NOT NULL REFERENCES agents(id), capability TEXT NOT NULL, configuration TEXT NOT NULL DEFAULT '{}', approval_status TEXT NOT NULL CHECK(approval_status IN ('approved','pending','denied')), created_at INTEGER NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY(agent_id,capability));
 CREATE TABLE IF NOT EXISTS agent_integrations(agent_id TEXT NOT NULL REFERENCES agents(id), integration_id TEXT NOT NULL, credential_reference TEXT, resource_scope TEXT, configuration TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(agent_id,integration_id));
@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS agent_skills(agent_id TEXT NOT NULL REFERENCES agents
 CREATE TABLE IF NOT EXISTS approval_requests(id TEXT PRIMARY KEY, agent_id TEXT REFERENCES agents(id), request_type TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','approved','denied','expired')), requested_by TEXT NOT NULL, requested_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, decided_by TEXT, decided_at INTEGER);
 CREATE TABLE IF NOT EXISTS conversation_bindings(platform TEXT NOT NULL, scope_id TEXT NOT NULL, conversation_id TEXT NOT NULL, thread_id TEXT NOT NULL DEFAULT '', principal_id TEXT NOT NULL, agent_id TEXT NOT NULL REFERENCES agents(id), updated_at INTEGER NOT NULL, PRIMARY KEY(platform,scope_id,conversation_id,thread_id,principal_id));
 CREATE TABLE IF NOT EXISTS audit_events(id TEXT PRIMARY KEY, timestamp INTEGER NOT NULL, request_id TEXT, actor_id TEXT, actor_platform TEXT, agent_id TEXT, action TEXT NOT NULL, resource TEXT, decision TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_profile_live ON agents(profile_name) WHERE status!='deleted';
 CREATE INDEX IF NOT EXISTS idx_acl_principal ON agent_acl(principal_id,revoked_at);
 CREATE INDEX IF NOT EXISTS idx_audit_agent ON audit_events(agent_id,timestamp);
 """
@@ -32,21 +33,23 @@ class Registry:
         c.execute('PRAGMA synchronous=FULL'); return c
     def initialize(self):
         with self.connect() as c:c.executescript(SCHEMA)
-        self._migrate_autonomy_levels()
+        self._migrate_agents_table()
         try:self.path.chmod(0o600)
         except OSError:pass
-    def _migrate_autonomy_levels(self):
+    def _migrate_agents_table(self):
         with self.connect() as c:
             row=c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='agents'").fetchone()
             sql=row[0] if row else ''
-            if 'human-approval' in sql: return
-            c.execute('ALTER TABLE agents RENAME TO agents_old')
-            c.executescript(SCHEMA)
-            c.execute("""INSERT INTO agents(id,profile_name,display_name,description,purpose,owner_id,owner_platform,model,status,risk_level,access_policy,approval_required,created_at,updated_at,created_by,deleted_at)
-                      SELECT id,profile_name,display_name,description,purpose,owner_id,owner_platform,model,status,
-                      CASE risk_level WHEN 'read-only' THEN 'human-approval' WHEN 'low' THEN 'human-approval' WHEN 'medium' THEN 'human-approval' WHEN 'high' THEN 'autonomous' ELSE risk_level END,
-                      access_policy,approval_required,created_at,updated_at,created_by,deleted_at FROM agents_old""")
-            c.execute('DROP TABLE agents_old')
+            needs_rebuild=('human-approval' not in sql) or ('profile_name TEXT UNIQUE' in sql)
+            if needs_rebuild:
+                c.execute('ALTER TABLE agents RENAME TO agents_old')
+                c.executescript(SCHEMA)
+                c.execute("""INSERT INTO agents(id,profile_name,display_name,description,purpose,owner_id,owner_platform,model,status,risk_level,access_policy,approval_required,created_at,updated_at,created_by,deleted_at)
+                          SELECT id,profile_name,display_name,description,purpose,owner_id,owner_platform,model,status,
+                          CASE risk_level WHEN 'read-only' THEN 'human-approval' WHEN 'low' THEN 'human-approval' WHEN 'medium' THEN 'human-approval' WHEN 'high' THEN 'autonomous' ELSE risk_level END,
+                          access_policy,approval_required,created_at,updated_at,created_by,deleted_at FROM agents_old""")
+                c.execute('DROP TABLE agents_old')
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_profile_live ON agents(profile_name) WHERE status!='deleted'")
     @contextmanager
     def tx(self):
         with self._lock:
